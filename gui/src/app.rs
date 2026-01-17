@@ -12,6 +12,7 @@ use kore_vanity::backend::{
     select_backend, select_backend_with_config, BackendInfo, BackendMode, FoundKey,
     Progress, SearchFilter,
 };
+use kore_vanity::probability::{calculate_stats, calculate_progress, format_probability, format_number};
 
 /// Application state
 pub struct VanityApp {
@@ -48,6 +49,9 @@ pub struct VanityApp {
 
     // Pending prefixes
     pending_prefixes: Vec<String>,
+
+    // Active contains words (for stats calculation)
+    active_contains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +125,7 @@ impl VanityApp {
             start_time: None,
             error_message: None,
             pending_prefixes: Vec::new(),
+            active_contains: Vec::new(),
         }
     }
 
@@ -183,6 +188,9 @@ impl VanityApp {
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
+
+        // Store for stats calculation
+        self.active_contains = contains.clone();
 
         let filter = SearchFilter { contains };
 
@@ -438,33 +446,106 @@ impl eframe::App for VanityApp {
                     .max()
                     .unwrap_or(5);
 
-                let expected = 2_f64.powi(5 * max_prefix_len as i32);
-                let progress_pct = (self.progress.keys_checked as f64 / expected) as f32;
+                // Calculate live statistics using probability module
+                let live_stats = calculate_progress(
+                    self.progress.keys_checked,
+                    self.progress.keys_per_sec,
+                    max_prefix_len,
+                    &self.active_contains,
+                );
 
                 ui.add(
-                    egui::ProgressBar::new(progress_pct.min(1.0))
+                    egui::ProgressBar::new((live_stats.progress_percent / 100.0) as f32)
                         .show_percentage()
                         .animate(self.state == AppState::Running),
                 );
 
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "Keys checked: {}",
-                        format_large_number(self.progress.keys_checked)
-                    ));
-                    ui.separator();
-                    ui.label(format!(
-                        "Speed: {:.2} M/sec",
-                        self.progress.keys_per_sec / 1_000_000.0
-                    ));
-                });
+                // Stats grid
+                egui::Grid::new("progress_grid")
+                    .num_columns(2)
+                    .spacing([20.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Keys checked:");
+                        ui.label(format_number(self.progress.keys_checked as f64));
+                        ui.end_row();
 
-                if let Some(start) = self.start_time {
-                    let elapsed = start.elapsed();
-                    ui.label(format!("Elapsed: {}", format_duration(elapsed)));
-                }
+                        ui.label("Speed:");
+                        ui.label(format!("{:.2} M/sec", self.progress.keys_per_sec / 1_000_000.0));
+                        ui.end_row();
+
+                        if let Some(start) = self.start_time {
+                            ui.label("Elapsed:");
+                            ui.label(format_duration(start.elapsed()));
+                            ui.end_row();
+                        }
+
+                        ui.label("Est. remaining:");
+                        ui.label(&live_stats.remaining_estimate);
+                        ui.end_row();
+
+                        ui.label("Probability so far:");
+                        ui.label(format!("{:.1}%", live_stats.cumulative_probability * 100.0));
+                        ui.end_row();
+
+                        ui.label("Expected keys:");
+                        ui.label(format_number(live_stats.expected_keys));
+                        ui.end_row();
+                    });
 
                 ui.add_space(10.0);
+            }
+
+            // Show initial probability estimate when idle with valid input
+            if self.state == AppState::Idle && !self.prefix_input.trim().is_empty() {
+                let prefixes: Vec<String> = self.prefix_input
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let contains: Vec<String> = self.contains_input
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                if let Some(max_len) = prefixes.iter().map(|p| p.len()).max() {
+                    if let Some(info) = &self.backend_info {
+                        let stats = calculate_stats(max_len, &contains, info.estimated_speed as f64);
+
+                        ui.separator();
+                        ui.add_space(5.0);
+                        ui.label("Probability Estimate:");
+
+                        egui::Grid::new("estimate_grid")
+                            .num_columns(2)
+                            .spacing([20.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label("Probability per key:");
+                                ui.label(format_probability(stats.probability_per_key));
+                                ui.end_row();
+
+                                ui.label("Expected keys:");
+                                ui.label(format_number(stats.expected_keys));
+                                ui.end_row();
+
+                                ui.label("Estimated time:");
+                                ui.colored_label(
+                                    if stats.estimated_seconds > 86400.0 * 30.0 {
+                                        egui::Color32::RED
+                                    } else if stats.estimated_seconds > 86400.0 {
+                                        egui::Color32::YELLOW
+                                    } else {
+                                        egui::Color32::GREEN
+                                    },
+                                    &stats.time_estimate
+                                );
+                                ui.end_row();
+                            });
+
+                        ui.add_space(10.0);
+                    }
+                }
             }
 
             // Results section

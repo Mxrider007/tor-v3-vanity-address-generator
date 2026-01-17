@@ -5,12 +5,17 @@
 
 pub mod backend;
 pub mod onion;
+pub mod probability;
 
 pub use backend::{
     select_backend, select_backend_with_mode, select_backend_with_config,
     Backend, BackendInfo, BackendMode, GeneratorError, FoundKey, Progress, SearchFilter, format_speed,
 };
 pub use onion::pubkey_to_onion;
+pub use probability::{
+    calculate_stats, calculate_progress, format_duration_human, format_probability, format_number,
+    SearchStats, LiveStats, ProbabilityBreakdown,
+};
 
 /// File prefix for Tor ed25519 secret key files
 pub const FILE_PREFIX: &[u8] = b"== ed25519v1-secret: type0 ==\0\0\0";

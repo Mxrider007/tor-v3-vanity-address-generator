@@ -7,7 +7,8 @@ use crossbeam_channel::unbounded;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use kore_vanity::backend::{select_backend_with_mode, select_backend_with_config, BackendMode, Progress, SearchFilter};
+use kore_vanity::backend::{select_backend_with_mode, BackendMode, Progress, SearchFilter};
+use kore_vanity::probability::{calculate_stats, calculate_progress, format_probability, format_number};
 
 #[derive(Parser)]
 #[command(name = "kore-vanity")]
@@ -63,30 +64,6 @@ impl From<Mode> for BackendMode {
     }
 }
 
-/// Pretty duration formatter
-struct PrettyDur(chrono::Duration);
-
-impl std::fmt::Display for PrettyDur {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.0.num_weeks() >= 52 {
-            write!(f, "{} years, ", self.0.num_weeks() / 52)?;
-        }
-        if self.0.num_weeks() % 52 > 0 {
-            write!(f, "{} weeks, ", self.0.num_weeks() % 52)?;
-        }
-        if self.0.num_days() % 7 > 0 {
-            write!(f, "{} days, ", self.0.num_days() % 7)?;
-        }
-        if self.0.num_hours() % 24 > 0 {
-            write!(f, "{} hours, ", self.0.num_hours() % 24)?;
-        }
-        if self.0.num_minutes() % 60 > 0 {
-            write!(f, "{} minutes, ", self.0.num_minutes() % 60)?;
-        }
-        write!(f, "{} seconds", self.0.num_seconds() % 60)
-    }
-}
-
 fn main() {
     let cli = Cli::parse();
 
@@ -128,6 +105,20 @@ fn main() {
     let backend = select_backend_with_mode(cli.mode.into());
     let info = backend.info();
 
+    // Show initial probability estimate
+    println!("--- Probability Estimate ---");
+    let initial_stats = calculate_stats(max_len, &cli.contains, info.estimated_speed as f64);
+    println!("Prefix length: {} chars", max_len);
+    if !cli.contains.is_empty() {
+        println!("Contains words: {:?}", cli.contains);
+    }
+    println!("Probability per key: {}", format_probability(initial_stats.probability_per_key));
+    println!("Expected keys to check: {}", format_number(initial_stats.expected_keys));
+    println!("Estimated time @ {:.1}M/s: {}",
+        info.estimated_speed as f64 / 1_000_000.0,
+        initial_stats.time_estimate
+    );
+    println!("----------------------------");
     println!();
     println!("Starting generation...");
     println!();
@@ -151,15 +142,15 @@ fn main() {
     let filter = SearchFilter {
         contains: cli.contains.clone(),
     };
+    let contains_for_stats = cli.contains.clone();
 
     // Spawn generation thread
     let gen_handle = std::thread::spawn(move || {
         backend.generate_with_filter(prefixes, dst, progress_tx, result_tx, stop_rx, filter)
     });
 
-    // Progress display thread
+    // Progress display
     let start_time = Instant::now();
-    let expected = 2_f64.powi(5 * max_len as i32);
     let mut last_log = Instant::now();
     let mut found_count = 0;
     let total_prefixes = cli.prefixes.len();
@@ -168,45 +159,42 @@ fn main() {
         // Check for results
         while let Ok(result) = result_rx.try_recv() {
             found_count += 1;
+            println!();
             println!(
-                "FOUND [{}/{}]: {} -> {}",
+                "*** FOUND [{}/{}]: {} -> {} ***",
                 found_count, total_prefixes, result.prefix, result.onion_address
             );
-            println!("  Saved to: {}", result.key_path.display());
+            println!("    Saved to: {}", result.key_path.display());
+            println!();
         }
 
         // Check for progress
         if let Ok(progress) = progress_rx.try_recv() {
             if last_log.elapsed() > Duration::from_secs(10) {
-                let dur = progress.elapsed_secs;
-                let dur_pretty = PrettyDur(
-                    chrono::Duration::from_std(Duration::from_secs_f64(dur)).unwrap_or(chrono::Duration::zero()),
+                // Calculate live statistics
+                let live_stats = calculate_progress(
+                    progress.keys_checked,
+                    progress.keys_per_sec,
+                    max_len,
+                    &contains_for_stats,
                 );
 
-                let progress_pct = progress.keys_checked as f64 / expected;
-                let expected_dur = if progress_pct > 0.0 {
-                    dur / progress_pct
-                } else {
-                    0.0
-                };
-                let expected_dur_pretty = PrettyDur(
-                    chrono::Duration::from_std(Duration::from_secs_f64(expected_dur))
-                        .unwrap_or(chrono::Duration::zero()),
-                );
+                let elapsed_secs = start_time.elapsed().as_secs();
+                let elapsed_str = format_elapsed(elapsed_secs);
 
-                println!();
-                println!(
-                    "Progress: {:.2e} / {:.2e} keys ({:.4}%)",
-                    progress.keys_checked as f64,
-                    expected,
-                    progress_pct * 100.0
+                println!("┌─────────────────────────────────────────────────┐");
+                println!("│ Keys checked: {:>15} ({:>6.2}%)       │",
+                    format_number(progress.keys_checked as f64),
+                    live_stats.progress_percent
                 );
-                println!(
-                    "Speed: {:.2} M keys/sec",
-                    progress.keys_per_sec / 1_000_000.0
+                println!("│ Speed: {:>22.2} M/sec          │", progress.keys_per_sec / 1_000_000.0);
+                println!("│ Elapsed: {:>20}              │", elapsed_str);
+                println!("│ Est. remaining: {:>14}              │", live_stats.remaining_estimate);
+                println!("│ Cumulative probability: {:>10}         │",
+                    format!("{:.1}%", live_stats.cumulative_probability * 100.0)
                 );
-                println!("Elapsed: {} / Est. total: {}", dur_pretty, expected_dur_pretty);
-                println!("Found: {}/{} prefixes", found_count, total_prefixes);
+                println!("│ Found: {}/{}                                     │", found_count, total_prefixes);
+                println!("└─────────────────────────────────────────────────┘");
                 println!();
 
                 last_log = Instant::now();
@@ -230,10 +218,10 @@ fn main() {
     // Wait for generator
     match gen_handle.join() {
         Ok(Ok(())) => {
+            let elapsed = start_time.elapsed().as_secs();
             println!();
             println!("=== Complete! ===");
-            println!("Found all {} prefixes in {}", total_prefixes,
-                PrettyDur(chrono::Duration::from_std(start_time.elapsed()).unwrap_or(chrono::Duration::zero())));
+            println!("Found all {} prefixes in {}", total_prefixes, format_elapsed(elapsed));
         }
         Ok(Err(e)) => {
             eprintln!();
@@ -243,5 +231,17 @@ fn main() {
             eprintln!();
             eprintln!("Generation thread panicked");
         }
+    }
+}
+
+fn format_elapsed(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else if seconds < 86400 {
+        format!("{}h {}m", seconds / 3600, (seconds % 3600) / 60)
+    } else {
+        format!("{}d {}h", seconds / 86400, (seconds % 86400) / 3600)
     }
 }
