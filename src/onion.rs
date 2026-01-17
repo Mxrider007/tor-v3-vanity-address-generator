@@ -33,6 +33,6 @@ mod tests {
         let pubkey = [0u8; 32];
         let onion = pubkey_to_onion(&pubkey);
         assert!(onion.ends_with(".onion"));
-        assert_eq!(onion.len(), 62 + 6); // 56 base32 chars + ".onion"
+        assert_eq!(onion.len(), 56 + 6); // 56 base32 chars + ".onion"
     }
 }

@@ -1,8 +1,10 @@
 //! External CUDA backend using Danukeru's vanity_torv3_cuda executable
 //!
 //! This backend spawns an external CUDA process for GPU-accelerated generation.
+//! Supports wildcard patterns with `?` as single-character wildcard.
 
 use crate::onion::pubkey_to_onion;
+use crate::pattern::{matches_prefix, contains_pattern, is_valid_pattern};
 use crate::{FILE_PREFIX, PUBKEY_PREFIX};
 use crossbeam_channel::{Receiver, Sender};
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
@@ -99,14 +101,9 @@ impl ExternalCudaBackend {
         stop_rx: Receiver<()>,
         filter: SearchFilter,
     ) -> Result<(), GeneratorError> {
-        // Validate prefixes
+        // Validate prefixes (allows a-z, 2-7, ? as wildcard)
         for prefix in &prefixes {
-            if base32::decode(
-                base32::Alphabet::Rfc4648Lower { padding: false },
-                &format!("{}aa", prefix),
-            )
-            .is_none()
-            {
+            if !is_valid_pattern(prefix) {
                 return Err(GeneratorError::InvalidPrefix(prefix.clone()));
             }
         }
@@ -146,9 +143,10 @@ impl ExternalCudaBackend {
         let start_time = Instant::now();
         let child_arc: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
 
-        // Prepare contains words (lowercase for case-insensitive matching)
-        let contains_words: Vec<String> = filter.contains.iter().map(|w| w.to_lowercase()).collect();
+        // Prepare contains patterns (supports ? wildcards, case-insensitive)
+        let contains_words: Vec<String> = filter.contains.clone();
         let has_contains_filter = !contains_words.is_empty();
+        let prefix_anywhere = filter.prefix_anywhere;
 
         // Stop signal handler
         let stop_stopped = stopped.clone();
@@ -242,10 +240,17 @@ impl ExternalCudaBackend {
             let public_key_bytes = public_key_point.compress().to_bytes();
             let onion = pubkey_to_onion(&public_key_bytes);
 
-            // Check which prefix matched
+            // Check which prefix/pattern matched (supports ? wildcards)
             let mut matched_prefix = None;
             for prefix in remaining.lock().unwrap().iter() {
-                if onion.to_lowercase().starts_with(&prefix.to_lowercase()) {
+                let matches = if prefix_anywhere {
+                    // Match pattern anywhere in the address
+                    contains_pattern(&onion, prefix)
+                } else {
+                    // Match pattern at the start of the address
+                    matches_prefix(&onion, prefix)
+                };
+                if matches {
                     matched_prefix = Some(prefix.clone());
                     break;
                 }
@@ -257,8 +262,8 @@ impl ExternalCudaBackend {
                 prefix_match_counter.fetch_add(1, Ordering::Relaxed);
 
                 if has_contains_filter {
-                    let onion_lower = onion.to_lowercase();
-                    if !contains_words.iter().all(|word| onion_lower.contains(word)) {
+                    // Check if all required patterns appear in the address (supports ? wildcards)
+                    if !contains_words.iter().all(|word| contains_pattern(&onion, word)) {
                         // Prefix matched but contains filter failed - skip this address
                         contains_reject_counter.fetch_add(1, Ordering::Relaxed);
                         matched_prefix = None;

@@ -1,6 +1,8 @@
 //! CPU backend using Rayon for parallel processing
+//! Supports wildcard patterns with `?` as single-character wildcard.
 
 use crate::onion::pubkey_to_onion;
+use crate::pattern::{matches_prefix, contains_pattern, is_valid_pattern};
 use crate::{FILE_PREFIX, PUBKEY_PREFIX};
 use crossbeam_channel::{Receiver, Sender};
 use rayon::prelude::*;
@@ -63,14 +65,9 @@ impl CpuBackend {
         stop_rx: Receiver<()>,
         filter: SearchFilter,
     ) -> Result<(), GeneratorError> {
-        // Validate prefixes
+        // Validate prefixes (allows a-z, 2-7, ? as wildcard)
         for prefix in &prefixes {
-            if base32::decode(
-                base32::Alphabet::Rfc4648Lower { padding: false },
-                &format!("{}aa", prefix),
-            )
-            .is_none()
-            {
+            if !is_valid_pattern(prefix) {
                 return Err(GeneratorError::InvalidPrefix(prefix.clone()));
             }
         }
@@ -90,11 +87,10 @@ impl CpuBackend {
         let stopped = Arc::new(AtomicBool::new(false));
         let start_time = Instant::now();
 
-        // Prepare contains words (lowercase for case-insensitive matching)
-        let contains_words: Arc<Vec<String>> = Arc::new(
-            filter.contains.iter().map(|w| w.to_lowercase()).collect()
-        );
+        // Prepare contains patterns (supports ? wildcards, case-insensitive)
+        let contains_words: Arc<Vec<String>> = Arc::new(filter.contains.clone());
         let has_contains_filter = !contains_words.is_empty();
+        let prefix_anywhere = filter.prefix_anywhere;
 
         // Batch size per iteration
         const BATCH_SIZE: usize = 10_000;
@@ -133,11 +129,18 @@ impl CpuBackend {
                     // Generate onion address
                     let onion = pubkey_to_onion(&pubkey_bytes);
 
-                    // Check against remaining prefixes
+                    // Check against remaining prefixes (supports ? wildcards)
                     let remaining_guard = remaining.lock().unwrap();
                     let mut found_prefix = None;
                     for prefix in remaining_guard.iter() {
-                        if onion.starts_with(prefix) {
+                        let matches = if prefix_anywhere {
+                            // Match pattern anywhere in the address
+                            contains_pattern(&onion, prefix)
+                        } else {
+                            // Match pattern at the start of the address
+                            matches_prefix(&onion, prefix)
+                        };
+                        if matches {
                             found_prefix = Some(prefix.clone());
                             break;
                         }
@@ -150,8 +153,8 @@ impl CpuBackend {
                         prefix_match_counter.fetch_add(1, Ordering::Relaxed);
 
                         if has_contains_filter {
-                            let onion_lower = onion.to_lowercase();
-                            if !contains_words.iter().all(|word| onion_lower.contains(word)) {
+                            // Check if all required patterns appear in the address (supports ? wildcards)
+                            if !contains_words.iter().all(|word| contains_pattern(&onion, word)) {
                                 // Prefix matched but contains filter failed - skip this address
                                 contains_reject_counter.fetch_add(1, Ordering::Relaxed);
                                 found_prefix = None;

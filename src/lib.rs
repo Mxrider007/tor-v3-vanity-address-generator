@@ -5,6 +5,7 @@
 
 pub mod backend;
 pub mod onion;
+pub mod pattern;
 pub mod probability;
 
 pub use backend::{
@@ -14,8 +15,9 @@ pub use backend::{
 pub use onion::pubkey_to_onion;
 pub use probability::{
     calculate_stats, calculate_progress, format_duration_human, format_probability, format_number,
-    SearchStats, LiveStats, ProbabilityBreakdown,
+    effective_prefix_len, SearchStats, LiveStats, ProbabilityBreakdown,
 };
+pub use pattern::{matches_prefix, contains_pattern, is_valid_pattern};
 
 /// File prefix for Tor ed25519 secret key files
 pub const FILE_PREFIX: &[u8] = b"== ed25519v1-secret: type0 ==\0\0\0";

@@ -65,10 +65,14 @@ pub struct FoundKey {
 }
 
 /// Filter configuration for vanity address search
+/// Supports `?` as single-character wildcard in both prefix and contains patterns.
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
-    /// Words that must appear somewhere in the onion address (case-insensitive)
+    /// Patterns that must appear somewhere in the onion address (case-insensitive)
+    /// Supports `?` as wildcard. Example: `ko?e` matches "kore", "koke", etc.
     pub contains: Vec<String>,
+    /// If true, match prefix pattern anywhere in the address (not just at start)
+    pub prefix_anywhere: bool,
 }
 
 /// Information about a computation backend

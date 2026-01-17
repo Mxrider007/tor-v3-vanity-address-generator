@@ -36,6 +36,7 @@ pub struct ProbabilityBreakdown {
 }
 
 /// Calculate search statistics for given parameters
+/// prefix_len is the number of fixed (non-wildcard) characters in the longest prefix pattern
 pub fn calculate_stats(
     prefix_len: usize,
     contains_words: &[String],
@@ -67,29 +68,42 @@ pub fn calculate_stats(
     }
 }
 
+/// Calculate effective prefix length (non-wildcard characters only)
+pub fn effective_prefix_len(prefixes: &[String]) -> usize {
+    prefixes.iter().map(|p| count_fixed_chars(p)).max().unwrap_or(0)
+}
+
+/// Count non-wildcard characters in a pattern (wildcards don't affect probability)
+fn count_fixed_chars(pattern: &str) -> usize {
+    pattern.chars().filter(|c| *c != '?').count()
+}
+
 /// Calculate probability breakdown
 fn calculate_breakdown(prefix_len: usize, contains_words: &[String]) -> ProbabilityBreakdown {
     // Prefix probability: 1/32^prefix_len
+    // Note: this takes the full pattern length, wildcards should be accounted for by caller
     let prefix_probability = if prefix_len > 0 {
         1.0 / BASE32_SIZE.powi(prefix_len as i32)
     } else {
         1.0
     };
 
-    // Contains probability: for each word, ~(positions) / 32^word_len
+    // Contains probability: for each word, ~(positions) / 32^(non-wildcard chars)
     // Multiple words: multiply probabilities (assuming independence)
     let mut contains_probability = 1.0;
     let mut contains_positions = Vec::new();
 
     for word in contains_words {
         let word_len = word.len();
+        let fixed_chars = count_fixed_chars(word);
         if word_len > 0 && word_len <= ONION_ADDRESS_LENGTH {
             // Number of positions where the word can appear
             let positions = ONION_ADDRESS_LENGTH - word_len + 1;
             contains_positions.push(positions);
 
             // Probability word appears at any position (approximate, ignoring overlaps)
-            let word_probability = (positions as f64) / BASE32_SIZE.powi(word_len as i32);
+            // Only fixed (non-wildcard) characters affect probability
+            let word_probability = (positions as f64) / BASE32_SIZE.powi(fixed_chars as i32);
             contains_probability *= word_probability;
         }
     }

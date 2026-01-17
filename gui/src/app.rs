@@ -12,13 +12,15 @@ use kore_vanity::backend::{
     select_backend, select_backend_with_config, BackendInfo, BackendMode, FoundKey,
     Progress, SearchFilter,
 };
-use kore_vanity::probability::{calculate_stats, calculate_progress, format_probability, format_number};
+use kore_vanity::probability::{calculate_stats, calculate_progress, format_probability, format_number, effective_prefix_len};
+use kore_vanity::pattern::is_valid_pattern;
 
 /// Application state
 pub struct VanityApp {
     // Input fields
     prefix_input: String,
     contains_input: String,
+    anywhere: bool,
     output_dir: String,
 
     // Backend selection
@@ -109,6 +111,7 @@ impl VanityApp {
         Self {
             prefix_input: String::new(),
             contains_input: String::new(),
+            anywhere: false,
             output_dir,
             selected_mode: BackendModeSelection::Auto,
             cpu_threads: max_threads,
@@ -139,19 +142,14 @@ impl VanityApp {
             .collect();
 
         if prefixes.is_empty() {
-            self.error_message = Some("Please enter at least one prefix".to_string());
+            self.error_message = Some("Please enter at least one pattern".to_string());
             return;
         }
 
-        // Validate each prefix
+        // Validate each prefix pattern (allows a-z, 2-7, ? as wildcard)
         for prefix in &prefixes {
-            if base32::decode(
-                base32::Alphabet::Rfc4648Lower { padding: false },
-                &format!("{}aa", prefix),
-            )
-            .is_none()
-            {
-                self.error_message = Some(format!("Invalid base32 prefix: '{}'", prefix));
+            if !is_valid_pattern(prefix) {
+                self.error_message = Some(format!("Invalid pattern: '{}' (use a-z, 2-7, ? for wildcard)", prefix));
                 return;
             }
         }
@@ -189,10 +187,21 @@ impl VanityApp {
             .filter(|s| !s.is_empty())
             .collect();
 
+        // Validate contains patterns
+        for pattern in &contains {
+            if !is_valid_pattern(pattern) {
+                self.error_message = Some(format!("Invalid contains pattern: '{}' (use a-z, 2-7, ? for wildcard)", pattern));
+                return;
+            }
+        }
+
         // Store for stats calculation
         self.active_contains = contains.clone();
 
-        let filter = SearchFilter { contains };
+        let filter = SearchFilter {
+            contains,
+            prefix_anywhere: self.anywhere,
+        };
 
         // Spawn worker thread
         let backend_mode = self.selected_mode.to_backend_mode();
@@ -347,13 +356,18 @@ impl eframe::App for VanityApp {
             ui.add_space(10.0);
 
             // Prefix input
-            ui.label("Prefixes (comma-separated):");
+            ui.label("Patterns (comma-separated):");
             ui.add(
                 egui::TextEdit::singleline(&mut self.prefix_input)
-                    .hint_text("mysite,cool,anon")
+                    .hint_text("kore, ????wink, test?me")
                     .desired_width(f32::INFINITY),
             );
-            ui.small("Tip: Use lowercase letters and numbers (base32). 5-6 chars recommended.");
+            ui.small("Use a-z, 2-7. Use ? as wildcard for any character. 5-6 chars recommended.");
+
+            ui.add_space(5.0);
+
+            // Anywhere checkbox
+            ui.checkbox(&mut self.anywhere, "Match patterns anywhere in address (not just at start)");
 
             ui.add_space(10.0);
 
@@ -361,10 +375,10 @@ impl eframe::App for VanityApp {
             ui.label("Must also contain (optional, comma-separated):");
             ui.add(
                 egui::TextEdit::singleline(&mut self.contains_input)
-                    .hint_text("block,chain")
+                    .hint_text("block, ch??n")
                     .desired_width(f32::INFINITY),
             );
-            ui.small("Words that must appear anywhere in the address (in addition to prefix).");
+            ui.small("Patterns that must appear anywhere in the address. Use ? as wildcard.");
 
             ui.add_space(10.0);
 
@@ -437,14 +451,14 @@ impl eframe::App for VanityApp {
             if self.state == AppState::Running || self.progress.keys_checked > 0 {
                 ui.label("Progress:");
 
-                // Calculate progress percentage based on longest prefix
-                let max_prefix_len = self
+                // Calculate progress percentage based on effective prefix length (non-wildcard chars)
+                let all_prefixes: Vec<String> = self
                     .pending_prefixes
                     .iter()
                     .chain(self.results.iter().map(|r: &FoundKey| &r.prefix))
-                    .map(|p: &String| p.len())
-                    .max()
-                    .unwrap_or(5);
+                    .cloned()
+                    .collect();
+                let max_prefix_len = effective_prefix_len(&all_prefixes).max(1);
 
                 // Calculate live statistics using probability module
                 let live_stats = calculate_progress(
@@ -520,7 +534,8 @@ impl eframe::App for VanityApp {
                     .filter(|s| !s.is_empty())
                     .collect();
 
-                if let Some(max_len) = prefixes.iter().map(|p| p.len()).max() {
+                let max_len = effective_prefix_len(&prefixes);
+                if max_len > 0 {
                     if let Some(info) = &self.backend_info {
                         let stats = calculate_stats(max_len, &contains, info.estimated_speed as f64);
 

@@ -8,14 +8,16 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use kore_vanity::backend::{select_backend_with_mode, BackendMode, Progress, SearchFilter};
-use kore_vanity::probability::{calculate_stats, calculate_progress, format_probability, format_number};
+use kore_vanity::probability::{calculate_stats, calculate_progress, format_probability, format_number, effective_prefix_len};
+use kore_vanity::pattern::is_valid_pattern;
 
 #[derive(Parser)]
 #[command(name = "kore-vanity")]
 #[command(about = "Vanity onion address generator with GPU acceleration")]
 #[command(version)]
 struct Cli {
-    /// Desired prefixes (comma-separated)
+    /// Desired prefix patterns (comma-separated). Use ? as single-character wildcard.
+    /// Example: kore, ????wink, test?me
     #[arg(required = true, value_delimiter = ',')]
     prefixes: Vec<String>,
 
@@ -31,10 +33,14 @@ struct Cli {
     #[arg(short = 't', long, default_value_t = num_cpus::get())]
     threads: usize,
 
-    /// Words that must also appear in the address (in addition to prefix)
-    /// Can be specified multiple times: --contains block --contains chain
-    #[arg(short = 'c', long = "contains", value_name = "WORD")]
+    /// Words/patterns that must also appear in the address (in addition to prefix)
+    /// Supports ? as single-character wildcard. Can be specified multiple times.
+    #[arg(short = 'c', long = "contains", value_name = "PATTERN")]
     contains: Vec<String>,
+
+    /// Match prefix pattern anywhere in the address, not just at the start
+    #[arg(short = 'a', long = "anywhere")]
+    anywhere: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -73,27 +79,25 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Validate prefixes
-    let max_len = cli.prefixes.iter().map(|p| p.len()).max().unwrap_or(0);
+    // Validate prefixes (allows a-z, 2-7, and ? as wildcard)
+    let max_len = effective_prefix_len(&cli.prefixes);
     for prefix in &cli.prefixes {
-        if prefix.is_empty() {
-            eprintln!("Error: Empty prefix not allowed");
+        if !is_valid_pattern(prefix) {
+            eprintln!("Error: '{}' is not a valid pattern (use a-z, 2-7, ? for wildcard)", prefix);
             std::process::exit(1);
         }
-        // Check if valid base32
-        if base32::decode(
-            base32::Alphabet::Rfc4648Lower { padding: false },
-            &format!("{}aa", prefix),
-        )
-        .is_none()
-        {
-            eprintln!("Error: '{}' is not a valid base32 prefix", prefix);
+    }
+
+    // Validate contains patterns
+    for pattern in &cli.contains {
+        if !is_valid_pattern(pattern) {
+            eprintln!("Error: contains pattern '{}' is invalid (use a-z, 2-7, ? for wildcard)", pattern);
             std::process::exit(1);
         }
     }
 
     println!("=== Kore Vanity Generator ===");
-    println!("Prefixes: {:?}", cli.prefixes);
+    println!("Patterns: {:?}{}", cli.prefixes, if cli.anywhere { " (anywhere)" } else { "" });
     if !cli.contains.is_empty() {
         println!("Must contain: {:?}", cli.contains);
     }
@@ -141,6 +145,7 @@ fn main() {
     let dst = cli.dst.clone();
     let filter = SearchFilter {
         contains: cli.contains.clone(),
+        prefix_anywhere: cli.anywhere,
     };
     let contains_for_stats = cli.contains.clone();
 
