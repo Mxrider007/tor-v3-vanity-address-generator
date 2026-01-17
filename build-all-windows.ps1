@@ -10,6 +10,7 @@
 param(
     [switch]$SkipCuda,
     [switch]$SkipGui,
+    [switch]$InstallVS,
     [switch]$Help
 )
 
@@ -25,6 +26,7 @@ Usage: .\build-all-windows.ps1 [options]
 Options:
     -SkipCuda   Skip building CUDA generator (GUI only)
     -SkipGui    Skip building GUI (CUDA only)
+    -InstallVS  Force install Visual Studio Build Tools (even if already installed)
     -Help       Show this help
 
 This script builds:
@@ -163,6 +165,12 @@ if (-not $SkipCuda) {
     if (-not $SkipCuda) {
         $vsCheck = Test-VsBuildTools
 
+        # Force install if -InstallVS flag is set
+        if ($InstallVS) {
+            Write-Host "[INFO] -InstallVS flag set, installing Visual Studio Build Tools..." -ForegroundColor Cyan
+            $vsCheck = @{ Found = $false }
+        }
+
         if ($vsCheck.Found) {
             Write-Host "[OK] Visual Studio Build Tools: $($vsCheck.Message)" -ForegroundColor Green
 
@@ -172,14 +180,23 @@ if (-not $SkipCuda) {
                 Write-Host "[OK] Visual Studio environment configured" -ForegroundColor Green
             }
         } else {
-            Write-Host "[WARN] Visual Studio Build Tools not found." -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "Would you like to download and install Visual Studio Build Tools automatically?" -ForegroundColor Cyan
-            Write-Host "This will install the C++ build tools required for CUDA compilation." -ForegroundColor Gray
-            Write-Host ""
-            $response = Read-Host "Install now? (Y/N)"
+            # Skip prompt if -InstallVS flag is set
+            $doInstall = $false
+            if ($InstallVS) {
+                $doInstall = $true
+            } else {
+                Write-Host "[WARN] Visual Studio Build Tools not found." -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "Would you like to download and install Visual Studio Build Tools automatically?" -ForegroundColor Cyan
+                Write-Host "This will install the C++ build tools required for CUDA compilation." -ForegroundColor Gray
+                Write-Host ""
+                $response = Read-Host "Install now? (Y/N)"
+                if ($response -eq 'Y' -or $response -eq 'y') {
+                    $doInstall = $true
+                }
+            }
 
-            if ($response -eq 'Y' -or $response -eq 'y') {
+            if ($doInstall) {
                 Write-Host ""
                 Write-Host "[INFO] Downloading Visual Studio Build Tools installer..." -ForegroundColor White
                 $vsInstallerUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
@@ -234,9 +251,11 @@ if (-not $SkipCuda) {
                     $SkipCuda = $true
                 }
             } else {
-                Write-Host ""
-                Write-Host "Skipping CUDA build. Install manually from:" -ForegroundColor Gray
-                Write-Host "https://visualstudio.microsoft.com/downloads/" -ForegroundColor Gray
+                if (-not $InstallVS) {
+                    Write-Host ""
+                    Write-Host "Skipping CUDA build. Install manually from:" -ForegroundColor Gray
+                    Write-Host "https://visualstudio.microsoft.com/downloads/" -ForegroundColor Gray
+                }
                 $SkipCuda = $true
             }
         }
