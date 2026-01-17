@@ -201,9 +201,6 @@ if (-not $SkipCuda) {
                         "--norestart",
                         "--nocache",
                         "--add", "Microsoft.VisualStudio.Workload.VCTools",
-                        "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                        "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621",
-                        "--add", "Microsoft.VisualStudio.Component.VC.CMake.Project",
                         "--includeRecommended"
                     )
 
@@ -308,41 +305,35 @@ if (-not $SkipCuda) {
                 $ErrorActionPreference = "Continue"
 
                 $configured = $false
+                $generators = @(
+                    "Visual Studio 17 2022",
+                    "Visual Studio 16 2019"
+                )
 
-                # First try: Let CMake auto-detect the generator
-                Write-Host "[INFO] Trying CMake auto-detect..." -ForegroundColor Gray
-                Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
-                Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
+                foreach ($gen in $generators) {
+                    Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
+                    Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
-                $output = & cmake .. -A x64 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    $configured = $true
-                    Write-Host "[OK] Configured with auto-detected generator" -ForegroundColor Green
+                    Write-Host "[INFO] Trying $gen..." -ForegroundColor Gray
+                    # Allow unsupported compiler for newer VS versions (VS 2026+)
+                    $output = & cmake .. -G $gen -A x64 -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $configured = $true
+                        Write-Host "[OK] Configured with $gen" -ForegroundColor Green
+                        break
+                    }
                 }
 
-                # Fallback: Try specific generators
+                # Fallback: try Ninja if VS generators failed
                 if (-not $configured) {
-                    $generators = @(
-                        "Visual Studio 17 2022",
-                        "Visual Studio 16 2019",
-                        "Ninja"
-                    )
+                    Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
+                    Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
-                    foreach ($gen in $generators) {
-                        Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
-                        Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
-
-                        Write-Host "[INFO] Trying $gen..." -ForegroundColor Gray
-                        if ($gen -eq "Ninja") {
-                            $output = & cmake .. -G $gen 2>&1
-                        } else {
-                            $output = & cmake .. -G $gen -A x64 2>&1
-                        }
-                        if ($LASTEXITCODE -eq 0) {
-                            $configured = $true
-                            Write-Host "[OK] Configured with $gen" -ForegroundColor Green
-                            break
-                        }
+                    Write-Host "[INFO] Trying Ninja..." -ForegroundColor Gray
+                    $output = & cmake .. -G Ninja -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $configured = $true
+                        Write-Host "[OK] Configured with Ninja" -ForegroundColor Green
                     }
                 }
 
@@ -365,13 +356,6 @@ if (-not $SkipCuda) {
                     }
                 } else {
                     Write-Host "[ERROR] CMake configuration failed" -ForegroundColor Red
-                    Write-Host ""
-                    Write-Host "Troubleshooting:" -ForegroundColor Yellow
-                    Write-Host "  1. Make sure Visual Studio Build Tools has 'Desktop development with C++' workload" -ForegroundColor Gray
-                    Write-Host "  2. Run 'Visual Studio Installer' and add C++ build tools" -ForegroundColor Gray
-                    Write-Host "  3. Try running this script from 'Developer PowerShell for VS'" -ForegroundColor Gray
-                    Write-Host ""
-                    Write-Host "The GUI will still work in CPU-only mode." -ForegroundColor Yellow
                 }
             } finally {
                 Pop-Location
@@ -398,53 +382,21 @@ if (-not $SkipGui) {
     Write-Host "[INFO] Building GUI..." -ForegroundColor White
     Push-Location $ScriptDir
     try {
-        $oldErrorAction = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-
-        # Run cargo and capture output - warnings go to stderr but aren't errors
-        $output = & cargo build -p kore-vanity-gui --release 2>&1
-        $buildExitCode = $LASTEXITCODE
-
-        # Display output (filter some noise)
-        $output | ForEach-Object {
-            $line = $_.ToString()
-            if ($line -match "^error" -or $line -match "^   Compiling" -or $line -match "^    Finished") {
-                Write-Host $line
-            } elseif ($line -match "^warning:") {
-                Write-Host $line -ForegroundColor Yellow
-            }
-        }
-
-        if ($buildExitCode -eq 0) {
+        cargo build -p kore-vanity-gui --release 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -eq 0) {
             Copy-Item "target\release\kore-vanity-gui.exe" (Join-Path $distDir "kore-vanity-gui.exe") -Force
             Write-Host "[OK] GUI built successfully" -ForegroundColor Green
         } else {
             Write-Host "[ERROR] GUI build failed" -ForegroundColor Red
-            $ErrorActionPreference = $oldErrorAction
             exit 1
         }
 
         Write-Host "[INFO] Building CLI..." -ForegroundColor White
-        $output = & cargo build -p kore-vanity --bin kore-vanity --release 2>&1
-        $buildExitCode = $LASTEXITCODE
-
-        $output | ForEach-Object {
-            $line = $_.ToString()
-            if ($line -match "^error" -or $line -match "^   Compiling" -or $line -match "^    Finished") {
-                Write-Host $line
-            } elseif ($line -match "^warning:") {
-                Write-Host $line -ForegroundColor Yellow
-            }
-        }
-
-        if ($buildExitCode -eq 0) {
+        cargo build -p kore-vanity --bin kore-vanity --release 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -eq 0) {
             Copy-Item "target\release\kore-vanity.exe" (Join-Path $distDir "kore-vanity.exe") -Force
             Write-Host "[OK] CLI built successfully" -ForegroundColor Green
-        } else {
-            Write-Host "[ERROR] CLI build failed" -ForegroundColor Red
         }
-
-        $ErrorActionPreference = $oldErrorAction
     } finally {
         Pop-Location
     }
@@ -476,5 +428,3 @@ if (-not (Test-Path (Join-Path $distDir "vanity_torv3_cuda.exe"))) {
     Write-Host "[NOTE] CUDA generator not built. GPU mode will fall back to CPU." -ForegroundColor Yellow
 }
 Write-Host ""
-Write-Host "Press any key to exit..." -ForegroundColor Gray
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
