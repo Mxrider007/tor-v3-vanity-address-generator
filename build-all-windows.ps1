@@ -306,8 +306,10 @@ if (-not $SkipCuda) {
 
                 $configured = $false
                 $generators = @(
+                    "Visual Studio 18 2025",
                     "Visual Studio 17 2022",
-                    "Visual Studio 16 2019"
+                    "Visual Studio 16 2019",
+                    "Ninja"
                 )
 
                 foreach ($gen in $generators) {
@@ -342,6 +344,13 @@ if (-not $SkipCuda) {
                     }
                 } else {
                     Write-Host "[ERROR] CMake configuration failed" -ForegroundColor Red
+                    Write-Host ""
+                    Write-Host "Troubleshooting:" -ForegroundColor Yellow
+                    Write-Host "  1. Make sure Visual Studio Build Tools has 'Desktop development with C++' workload" -ForegroundColor Gray
+                    Write-Host "  2. Run 'Visual Studio Installer' and add C++ build tools" -ForegroundColor Gray
+                    Write-Host "  3. Try running this script from 'Developer PowerShell for VS'" -ForegroundColor Gray
+                    Write-Host ""
+                    Write-Host "The GUI will still work in CPU-only mode." -ForegroundColor Yellow
                 }
             } finally {
                 Pop-Location
@@ -368,21 +377,53 @@ if (-not $SkipGui) {
     Write-Host "[INFO] Building GUI..." -ForegroundColor White
     Push-Location $ScriptDir
     try {
-        cargo build -p kore-vanity-gui --release 2>&1 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -eq 0) {
+        $oldErrorAction = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+
+        # Run cargo and capture output - warnings go to stderr but aren't errors
+        $output = & cargo build -p kore-vanity-gui --release 2>&1
+        $buildExitCode = $LASTEXITCODE
+
+        # Display output (filter some noise)
+        $output | ForEach-Object {
+            $line = $_.ToString()
+            if ($line -match "^error" -or $line -match "^   Compiling" -or $line -match "^    Finished") {
+                Write-Host $line
+            } elseif ($line -match "^warning:") {
+                Write-Host $line -ForegroundColor Yellow
+            }
+        }
+
+        if ($buildExitCode -eq 0) {
             Copy-Item "target\release\kore-vanity-gui.exe" (Join-Path $distDir "kore-vanity-gui.exe") -Force
             Write-Host "[OK] GUI built successfully" -ForegroundColor Green
         } else {
             Write-Host "[ERROR] GUI build failed" -ForegroundColor Red
+            $ErrorActionPreference = $oldErrorAction
             exit 1
         }
 
         Write-Host "[INFO] Building CLI..." -ForegroundColor White
-        cargo build -p kore-vanity --bin kore-vanity --release 2>&1 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -eq 0) {
+        $output = & cargo build -p kore-vanity --bin kore-vanity --release 2>&1
+        $buildExitCode = $LASTEXITCODE
+
+        $output | ForEach-Object {
+            $line = $_.ToString()
+            if ($line -match "^error" -or $line -match "^   Compiling" -or $line -match "^    Finished") {
+                Write-Host $line
+            } elseif ($line -match "^warning:") {
+                Write-Host $line -ForegroundColor Yellow
+            }
+        }
+
+        if ($buildExitCode -eq 0) {
             Copy-Item "target\release\kore-vanity.exe" (Join-Path $distDir "kore-vanity.exe") -Force
             Write-Host "[OK] CLI built successfully" -ForegroundColor Green
+        } else {
+            Write-Host "[ERROR] CLI build failed" -ForegroundColor Red
         }
+
+        $ErrorActionPreference = $oldErrorAction
     } finally {
         Pop-Location
     }
@@ -414,3 +455,5 @@ if (-not (Test-Path (Join-Path $distDir "vanity_torv3_cuda.exe"))) {
     Write-Host "[NOTE] CUDA generator not built. GPU mode will fall back to CPU." -ForegroundColor Yellow
 }
 Write-Host ""
+Write-Host "Press any key to exit..." -ForegroundColor Gray
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
