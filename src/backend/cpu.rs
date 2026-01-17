@@ -85,6 +85,8 @@ impl CpuBackend {
         let remaining: Arc<Mutex<HashSet<String>>> =
             Arc::new(Mutex::new(prefixes.into_iter().collect()));
         let counter = Arc::new(AtomicU64::new(0));
+        let prefix_match_counter = Arc::new(AtomicU64::new(0));
+        let contains_reject_counter = Arc::new(AtomicU64::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
         let start_time = Instant::now();
 
@@ -92,6 +94,7 @@ impl CpuBackend {
         let contains_words: Arc<Vec<String>> = Arc::new(
             filter.contains.iter().map(|w| w.to_lowercase()).collect()
         );
+        let has_contains_filter = !contains_words.is_empty();
 
         // Batch size per iteration
         const BATCH_SIZE: usize = 10_000;
@@ -142,11 +145,17 @@ impl CpuBackend {
                     drop(remaining_guard);
 
                     // Check if address also contains all required words
-                    if found_prefix.is_some() && !contains_words.is_empty() {
-                        let onion_lower = onion.to_lowercase();
-                        if !contains_words.iter().all(|word| onion_lower.contains(word)) {
-                            // Prefix matched but contains filter failed - skip this address
-                            found_prefix = None;
+                    if found_prefix.is_some() {
+                        // Count prefix match
+                        prefix_match_counter.fetch_add(1, Ordering::Relaxed);
+
+                        if has_contains_filter {
+                            let onion_lower = onion.to_lowercase();
+                            if !contains_words.iter().all(|word| onion_lower.contains(word)) {
+                                // Prefix matched but contains filter failed - skip this address
+                                contains_reject_counter.fetch_add(1, Ordering::Relaxed);
+                                found_prefix = None;
+                            }
                         }
                     }
 
@@ -219,6 +228,8 @@ impl CpuBackend {
                     keys_checked,
                     keys_per_sec,
                     elapsed_secs: elapsed,
+                    prefix_matches: prefix_match_counter.load(Ordering::Relaxed),
+                    contains_rejects: contains_reject_counter.load(Ordering::Relaxed),
                 });
             }
         });

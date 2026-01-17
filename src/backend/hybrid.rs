@@ -137,6 +137,8 @@ impl HybridBackend {
                     keys_checked: total_keys,
                     keys_per_sec,
                     elapsed_secs: elapsed,
+                    prefix_matches: 0,
+                    contains_rejects: 0,
                 });
 
                 if progress_remaining.lock().unwrap().is_empty() {

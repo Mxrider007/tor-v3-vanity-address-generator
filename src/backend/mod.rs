@@ -50,6 +50,10 @@ pub struct Progress {
     pub keys_checked: u64,
     pub keys_per_sec: f64,
     pub elapsed_secs: f64,
+    /// Number of times a prefix was matched (before contains filter)
+    pub prefix_matches: u64,
+    /// Number of times prefix matched but contains filter rejected
+    pub contains_rejects: u64,
 }
 
 /// A successfully found vanity key

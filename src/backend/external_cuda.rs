@@ -140,12 +140,15 @@ impl ExternalCudaBackend {
         let remaining: Arc<Mutex<HashSet<String>>> =
             Arc::new(Mutex::new(prefixes.iter().cloned().collect()));
         let counter = Arc::new(AtomicU64::new(0));
+        let prefix_match_counter = Arc::new(AtomicU64::new(0));
+        let contains_reject_counter = Arc::new(AtomicU64::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
         let start_time = Instant::now();
         let child_arc: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
 
         // Prepare contains words (lowercase for case-insensitive matching)
         let contains_words: Vec<String> = filter.contains.iter().map(|w| w.to_lowercase()).collect();
+        let has_contains_filter = !contains_words.is_empty();
 
         // Stop signal handler
         let stop_stopped = stopped.clone();
@@ -163,6 +166,8 @@ impl ExternalCudaBackend {
         // Progress reporting thread
         let progress_stopped = stopped.clone();
         let progress_counter = counter.clone();
+        let progress_prefix_counter = prefix_match_counter.clone();
+        let progress_reject_counter = contains_reject_counter.clone();
         let progress_remaining = remaining.clone();
         std::thread::spawn(move || {
             while !progress_stopped.load(Ordering::Relaxed) {
@@ -178,6 +183,8 @@ impl ExternalCudaBackend {
                     keys_checked,
                     keys_per_sec,
                     elapsed_secs: elapsed,
+                    prefix_matches: progress_prefix_counter.load(Ordering::Relaxed),
+                    contains_rejects: progress_reject_counter.load(Ordering::Relaxed),
                 });
 
                 if progress_remaining.lock().unwrap().is_empty() {
@@ -245,11 +252,17 @@ impl ExternalCudaBackend {
             }
 
             // Check if address also contains all required words
-            if matched_prefix.is_some() && !contains_words.is_empty() {
-                let onion_lower = onion.to_lowercase();
-                if !contains_words.iter().all(|word| onion_lower.contains(word)) {
-                    // Prefix matched but contains filter failed - skip this address
-                    matched_prefix = None;
+            if matched_prefix.is_some() {
+                // Count prefix match
+                prefix_match_counter.fetch_add(1, Ordering::Relaxed);
+
+                if has_contains_filter {
+                    let onion_lower = onion.to_lowercase();
+                    if !contains_words.iter().all(|word| onion_lower.contains(word)) {
+                        // Prefix matched but contains filter failed - skip this address
+                        contains_reject_counter.fetch_add(1, Ordering::Relaxed);
+                        matched_prefix = None;
+                    }
                 }
             }
 

@@ -193,6 +193,12 @@ fn main() {
                 println!("│ Cumulative probability: {:>10}         │",
                     format!("{:.1}%", live_stats.cumulative_probability * 100.0)
                 );
+                if progress.prefix_matches > 0 {
+                    println!("│ Prefix matches: {:>14} (rejected: {:<5})│",
+                        progress.prefix_matches,
+                        progress.contains_rejects
+                    );
+                }
                 println!("│ Found: {}/{}                                     │", found_count, total_prefixes);
                 println!("└─────────────────────────────────────────────────┘");
                 println!();

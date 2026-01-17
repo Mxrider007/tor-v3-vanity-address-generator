@@ -161,6 +161,8 @@ impl CudaBackend {
                     keys_checked,
                     keys_per_sec,
                     elapsed_secs: elapsed,
+                    prefix_matches: 0,
+                    contains_rejects: 0,
                 });
 
                 // Check if done

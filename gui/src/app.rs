@@ -490,6 +490,17 @@ impl eframe::App for VanityApp {
                         ui.label("Expected keys:");
                         ui.label(format_number(live_stats.expected_keys));
                         ui.end_row();
+
+                        // Show prefix matches only when contains filter is active
+                        if !self.active_contains.is_empty() && self.progress.prefix_matches > 0 {
+                            ui.label("Prefix matches:");
+                            ui.label(format!("{}", self.progress.prefix_matches));
+                            ui.end_row();
+
+                            ui.label("Rejected (missing words):");
+                            ui.label(format!("{}", self.progress.contains_rejects));
+                            ui.end_row();
+                        }
                     });
 
                 ui.add_space(10.0);
