@@ -423,21 +423,35 @@ if (-not $SkipGui) {
     Write-Host "[INFO] Building GUI..." -ForegroundColor White
     Push-Location $ScriptDir
     try {
-        cargo build -p kore-vanity-gui --release 2>&1 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -eq 0) {
+        $oldErrorPref = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+
+        $output = & cargo build -p kore-vanity-gui --release 2>&1
+        $guiExitCode = $LASTEXITCODE
+        $output | ForEach-Object { Write-Host $_ }
+
+        if ($guiExitCode -eq 0) {
             Copy-Item "target\release\kore-vanity-gui.exe" (Join-Path $distDir "kore-vanity-gui.exe") -Force
             Write-Host "[OK] GUI built successfully" -ForegroundColor Green
         } else {
             Write-Host "[ERROR] GUI build failed" -ForegroundColor Red
+            $ErrorActionPreference = $oldErrorPref
             exit 1
         }
 
         Write-Host "[INFO] Building CLI..." -ForegroundColor White
-        cargo build -p kore-vanity --bin kore-vanity --release 2>&1 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -eq 0) {
+        $output = & cargo build -p kore-vanity --bin kore-vanity --release 2>&1
+        $cliExitCode = $LASTEXITCODE
+        $output | ForEach-Object { Write-Host $_ }
+
+        if ($cliExitCode -eq 0) {
             Copy-Item "target\release\kore-vanity.exe" (Join-Path $distDir "kore-vanity.exe") -Force
             Write-Host "[OK] CLI built successfully" -ForegroundColor Green
+        } else {
+            Write-Host "[ERROR] CLI build failed" -ForegroundColor Red
         }
+
+        $ErrorActionPreference = $oldErrorPref
     } finally {
         Pop-Location
     }
