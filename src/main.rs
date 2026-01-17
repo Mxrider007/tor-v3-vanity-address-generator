@@ -1,4 +1,4 @@
-//! Tor V3 Vanity Address Generator CLI
+//! Kore Vanity Address Generator CLI
 //!
 //! A high-performance vanity address generator with GPU acceleration and CPU fallback.
 
@@ -7,11 +7,11 @@ use crossbeam_channel::unbounded;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use tor_v3_vanity::backend::{select_backend_with_mode, select_backend_with_config, BackendMode, Progress, SearchFilter};
+use kore_vanity::backend::{select_backend_with_mode, select_backend_with_config, BackendMode, Progress, SearchFilter};
 
 #[derive(Parser)]
-#[command(name = "t3v")]
-#[command(about = "Tor V3 vanity address generator with GPU acceleration")]
+#[command(name = "kore-vanity")]
+#[command(about = "Vanity onion address generator with GPU acceleration")]
 #[command(version)]
 struct Cli {
     /// Desired prefixes (comma-separated)
@@ -115,7 +115,7 @@ fn main() {
         }
     }
 
-    println!("=== Tor V3 Vanity Generator ===");
+    println!("=== Kore Vanity Generator ===");
     println!("Prefixes: {:?}", cli.prefixes);
     if !cli.contains.is_empty() {
         println!("Must contain: {:?}", cli.contains);

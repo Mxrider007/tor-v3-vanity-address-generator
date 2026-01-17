@@ -14,7 +14,7 @@ use std::time::Instant;
 use rustacuda::launch;
 use rustacuda::memory::{DeviceBox, DeviceBuffer};
 use rustacuda::prelude::*;
-use tor_v3_vanity_core as core;
+use kore_vanity_core as core;
 
 use super::{BackendInfo, FoundKey, GeneratorError, Progress};
 

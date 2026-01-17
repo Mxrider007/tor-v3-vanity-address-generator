@@ -1,4 +1,4 @@
-//! Tor V3 Vanity Generator GUI
+//! Kore Vanity Generator GUI
 //!
 //! A graphical interface for generating Tor v3 vanity addresses.
 
@@ -18,7 +18,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "Tor V3 Vanity Generator",
+        "Kore Vanity Generator",
         options,
         Box::new(|cc| Ok(Box::new(app::VanityApp::new(cc)))),
     )

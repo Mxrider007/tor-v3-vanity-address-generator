@@ -1,7 +1,7 @@
 //! Backend abstraction for vanity address generation
 //!
 //! This module provides a trait-based abstraction over different computation
-//! backends (CUDA GPU, CPU, and Hybrid CPU+GPU) for generating Tor v3 vanity addresses.
+//! backends (CUDA GPU, CPU, and Hybrid CPU+GPU) for generating vanity onion addresses.
 
 mod cpu;
 mod external_cuda;

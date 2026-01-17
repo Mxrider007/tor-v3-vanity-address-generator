@@ -2100,6 +2100,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "kore-vanity"
+version = "0.1.0"
+dependencies = [
+ "base32",
+ "chrono",
+ "clap",
+ "crossbeam-channel",
+ "ctrlc",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "kore-vanity-core",
+ "num_cpus",
+ "ptx-builder",
+ "rand 0.8.5",
+ "rayon",
+ "rustacuda",
+ "sha2",
+ "sha3",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kore-vanity-core"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "ed25519-compact",
+ "rustacuda_core",
+ "rustacuda_derive",
+]
+
+[[package]]
+name = "kore-vanity-gui"
+version = "0.1.0"
+dependencies = [
+ "base32",
+ "chrono",
+ "crossbeam-channel",
+ "directories",
+ "eframe",
+ "egui",
+ "kore-vanity",
+ "num_cpus",
+ "open",
+ "rfd",
+ "winres",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3589,23 +3638,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "t3v-gui"
-version = "0.1.0"
-dependencies = [
- "base32",
- "chrono",
- "crossbeam-channel",
- "directories",
- "eframe",
- "egui",
- "num_cpus",
- "open",
- "rfd",
- "tor-v3-vanity",
- "winres",
-]
-
-[[package]]
 name = "tempfile"
 version = "3.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3767,38 +3799,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3198b4b0a8e11f09dd03e133c0280504d0801269e9afa46362ffde1cbeebf44"
 dependencies = [
  "winnow",
-]
-
-[[package]]
-name = "tor-v3-vanity"
-version = "0.1.0"
-dependencies = [
- "base32",
- "chrono",
- "clap",
- "crossbeam-channel",
- "ctrlc",
- "curve25519-dalek",
- "ed25519-dalek",
- "num_cpus",
- "ptx-builder",
- "rand 0.8.5",
- "rayon",
- "rustacuda",
- "sha2",
- "sha3",
- "thiserror 1.0.69",
- "tor-v3-vanity-core",
-]
-
-[[package]]
-name = "tor-v3-vanity-core"
-version = "0.1.0"
-dependencies = [
- "byteorder",
- "ed25519-compact",
- "rustacuda_core",
- "rustacuda_derive",
 ]
 
 [[package]]

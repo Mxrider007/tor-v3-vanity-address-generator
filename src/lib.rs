@@ -1,6 +1,6 @@
-//! Tor V3 Vanity Address Generator Library
+//! Kore Vanity Address Generator Library
 //!
-//! This library provides functionality to generate Tor v3 vanity addresses
+//! This library provides functionality to generate vanity onion addresses
 //! with both CUDA GPU acceleration and CPU fallback support.
 
 pub mod backend;

@@ -109,7 +109,7 @@ fn cuda_build() {
             panic!(
                 "Pre-compiled PTX kernel not found at {}.\n\
                 Please copy the kernel.ptx file to the ptx/ directory.\n\
-                You can compile it on Linux with: cargo build -p tor-v3-vanity-core --target nvptx64-nvidia-cuda --release",
+                You can compile it on Linux with: cargo build -p kore-vanity-core --target nvptx64-nvidia-cuda --release",
                 ptx_path.display()
             );
         }

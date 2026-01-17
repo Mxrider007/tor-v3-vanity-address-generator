@@ -1,34 +1,32 @@
 [package]
-name = "tor-v3-vanity"
+name = "kore-vanity"
 version = "0.1.0"
-authors = ["Aiden McClelland <me@drbonez.dev>"]
 edition = "2021"
-description = "A TOR v3 vanity url generator with GPU acceleration and CPU fallback."
+description = "Vanity onion address generator with GPU acceleration and CPU fallback"
 license = "MIT"
-repository = "https://github.com/Mxrider420z/tor-v3-vanity"
+repository = "https://github.com/Mxrider420z/kore-vanity"
 readme = "README.md"
-keywords = ["tor", "v3", "vanity", "gpu", "cuda"]
+keywords = ["tor", "onion", "vanity", "gpu", "cuda"]
 
 [workspace]
 members = ["core", "gui"]
 
 [lib]
-name = "tor_v3_vanity"
+name = "kore_vanity"
 path = "src/lib.rs"
 
 [[bin]]
-name = "t3v"
+name = "kore-vanity"
 test = false
 bench = false
 path = "src/main.rs"
 
 [features]
 default = ["cuda"]
-cuda = ["dep:rustacuda", "dep:tor-v3-vanity-core"]
+cuda = ["dep:rustacuda", "dep:kore-vanity-core"]
 ptx-builder = ["dep:ptx-builder"]
 
 [dependencies]
-# Core dependencies (always included)
 base32 = "0.5"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
@@ -43,9 +41,8 @@ sha3 = "0.10"
 thiserror = "1.0"
 ctrlc = "3.4"
 
-# CUDA dependencies (optional)
 rustacuda = { version = "0.1.2", optional = true }
-tor-v3-vanity-core = { version = "0.1.0", path = "./core", optional = true }
+kore-vanity-core = { version = "0.1.0", path = "./core", optional = true }
 
 [build-dependencies]
 ptx-builder = { version = "0.5", optional = true }

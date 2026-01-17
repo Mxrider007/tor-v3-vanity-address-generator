@@ -1,4 +1,4 @@
-# Tor V3 Vanity Generator - Complete Windows Build Script
+# Kore Vanity Generator - Complete Windows Build Script
 # Builds both the Rust GUI and the CUDA generator
 #
 # Prerequisites:
@@ -18,7 +18,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if ($Help) {
     Write-Host @"
-Tor V3 Vanity Generator - Complete Windows Build
+Kore Vanity Generator - Complete Windows Build
 
 Usage: .\build-all-windows.ps1 [options]
 
@@ -29,7 +29,7 @@ Options:
 
 This script builds:
 1. vanity_torv3_cuda.exe - GPU-accelerated generator (requires CUDA + CMake)
-2. t3v-gui.exe - GUI application (requires Rust)
+2. kore-vanity-gui.exe - GUI application (requires Rust)
 
 Prerequisites:
     - Rust: https://rustup.rs/
@@ -42,13 +42,77 @@ Prerequisites:
 }
 
 Write-Host ""
-Write-Host "=== Tor V3 Vanity Generator - Complete Build ===" -ForegroundColor Cyan
+Write-Host "=== Kore Vanity Generator - Complete Build ===" -ForegroundColor Cyan
 Write-Host ""
 
 # Create output directory
 $distDir = Join-Path $ScriptDir "dist"
 if (-not (Test-Path $distDir)) {
     New-Item -ItemType Directory -Path $distDir | Out-Null
+}
+
+# ============================================
+# Helper: Check if Visual Studio Build Tools are available
+# ============================================
+function Test-VsBuildTools {
+    # Method 1: Check if cl.exe is already in PATH
+    $hasCompiler = Get-Command cl.exe -ErrorAction SilentlyContinue
+    if ($hasCompiler) {
+        return @{ Found = $true; Path = $null; Message = "C++ compiler already in PATH" }
+    }
+
+    # Method 2: Use vswhere to find VS installation
+    $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vsWhere) {
+        $vsPath = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if ($vsPath) {
+            $vcvarsall = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+            if (Test-Path $vcvarsall) {
+                return @{ Found = $true; Path = $vcvarsall; Message = "Found via vswhere: $vsPath" }
+            }
+        }
+    }
+
+    # Method 3: Check common installation paths
+    $fallbackPaths = @(
+        "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\Professional\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+    )
+
+    foreach ($path in $fallbackPaths) {
+        if (Test-Path $path) {
+            return @{ Found = $true; Path = $path; Message = "Found at: $path" }
+        }
+    }
+
+    return @{ Found = $false; Path = $null; Message = "Not found" }
+}
+
+# ============================================
+# Helper: Configure Visual Studio Environment
+# ============================================
+function Set-VsEnvironment {
+    param([string]$VcvarsPath)
+
+    if (-not $VcvarsPath -or -not (Test-Path $VcvarsPath)) {
+        return $false
+    }
+
+    Write-Host "[INFO] Configuring Visual Studio environment..." -ForegroundColor Gray
+
+    # Import environment variables from vcvars64.bat
+    cmd /c "`"$VcvarsPath`" >nul 2>&1 && set" | ForEach-Object {
+        if ($_ -match "^([^=]+)=(.*)$") {
+            Set-Item -Path "env:$($matches[1])" -Value $matches[2]
+        }
+    }
+
+    return $true
 }
 
 # ============================================
@@ -95,147 +159,86 @@ if (-not $SkipCuda) {
         }
     }
 
-    # Try to set up Visual Studio environment if not already configured
+    # Check for Visual Studio Build Tools
     if (-not $SkipCuda) {
-        $hasCompiler = Get-Command cl.exe -ErrorAction SilentlyContinue
-        if (-not $hasCompiler) {
-            Write-Host "[INFO] Setting up Visual Studio environment..." -ForegroundColor White
+        $vsCheck = Test-VsBuildTools
 
-            # Find vcvarsall.bat
-            $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-            $vcvarsall = $null
+        if ($vsCheck.Found) {
+            Write-Host "[OK] Visual Studio Build Tools: $($vsCheck.Message)" -ForegroundColor Green
 
-            if (Test-Path $vsWhere) {
-                $vsPath = & $vsWhere -latest -property installationPath 2>$null
-                if ($vsPath) {
-                    $vcvarsall = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-                }
-            }
-
-            # Fallback paths
-            if (-not $vcvarsall -or -not (Test-Path $vcvarsall)) {
-                $fallbackPaths = @(
-                    "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat",
-                    "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat",
-                    "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
-                    "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
-                    "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat",
-                    "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-                )
-                foreach ($path in $fallbackPaths) {
-                    if (Test-Path $path) {
-                        $vcvarsall = $path
-                        break
-                    }
-                }
-            }
-
-            if ($vcvarsall -and (Test-Path $vcvarsall)) {
-                Write-Host "[INFO] Found: $vcvarsall" -ForegroundColor Gray
-                # Import environment from vcvars64.bat
-                $envBefore = @{}
-                Get-ChildItem env: | ForEach-Object { $envBefore[$_.Name] = $_.Value }
-
-                cmd /c "`"$vcvarsall`" >nul 2>&1 && set" | ForEach-Object {
-                    if ($_ -match "^([^=]+)=(.*)$") {
-                        $name = $matches[1]
-                        $value = $matches[2]
-                        if ($envBefore[$name] -ne $value) {
-                            Set-Item -Path "env:$name" -Value $value
-                        }
-                    }
-                }
+            # Configure environment if we found vcvars but cl.exe isn't in PATH yet
+            if ($vsCheck.Path) {
+                Set-VsEnvironment -VcvarsPath $vsCheck.Path | Out-Null
                 Write-Host "[OK] Visual Studio environment configured" -ForegroundColor Green
-            } else {
-                Write-Host "[WARN] Visual Studio Build Tools not found." -ForegroundColor Yellow
-                Write-Host ""
-                Write-Host "Would you like to download and install Visual Studio Build Tools automatically?" -ForegroundColor Cyan
-                Write-Host "This will install the C++ build tools required for CUDA compilation." -ForegroundColor Gray
-                Write-Host ""
-                $response = Read-Host "Install now? (Y/N)"
-
-                if ($response -eq 'Y' -or $response -eq 'y') {
-                    Write-Host ""
-                    Write-Host "[INFO] Downloading Visual Studio Build Tools installer..." -ForegroundColor White
-                    $vsInstallerUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
-                    $vsInstallerPath = Join-Path $env:TEMP "vs_buildtools.exe"
-
-                    try {
-                        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                        Invoke-WebRequest -Uri $vsInstallerUrl -OutFile $vsInstallerPath -UseBasicParsing
-                        Write-Host "[OK] Downloaded installer" -ForegroundColor Green
-
-                        Write-Host ""
-                        Write-Host "[INFO] Installing Visual Studio Build Tools with C++ workload..." -ForegroundColor White
-                        Write-Host "       This may take 5-15 minutes. Please wait..." -ForegroundColor Gray
-                        Write-Host ""
-
-                        # Install with C++ workload (VCTools) and recommended components
-                        $installArgs = @(
-                            "--quiet",
-                            "--wait",
-                            "--norestart",
-                            "--nocache",
-                            "--add", "Microsoft.VisualStudio.Workload.VCTools",
-                            "--includeRecommended"
-                        )
-
-                        $process = Start-Process -FilePath $vsInstallerPath -ArgumentList $installArgs -Wait -PassThru
-
-                        if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
-                            Write-Host "[OK] Visual Studio Build Tools installed successfully!" -ForegroundColor Green
-
-                            if ($process.ExitCode -eq 3010) {
-                                Write-Host "[NOTE] A restart is recommended but not required." -ForegroundColor Yellow
-                            }
-
-                            # Try to find vcvarsall again
-                            $fallbackPaths = @(
-                                "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
-                                "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-                            )
-                            foreach ($path in $fallbackPaths) {
-                                if (Test-Path $path) {
-                                    $vcvarsall = $path
-                                    break
-                                }
-                            }
-
-                            if ($vcvarsall -and (Test-Path $vcvarsall)) {
-                                Write-Host "[INFO] Configuring environment..." -ForegroundColor White
-                                cmd /c "`"$vcvarsall`" >nul 2>&1 && set" | ForEach-Object {
-                                    if ($_ -match "^([^=]+)=(.*)$") {
-                                        Set-Item -Path "env:$($matches[1])" -Value $matches[2]
-                                    }
-                                }
-                                Write-Host "[OK] Ready to build!" -ForegroundColor Green
-                            } else {
-                                Write-Host "[WARN] Installation completed but vcvars64.bat not found." -ForegroundColor Yellow
-                                Write-Host "       Please restart this script." -ForegroundColor Gray
-                                $SkipCuda = $true
-                            }
-                        } else {
-                            Write-Host "[ERROR] Installation failed with exit code: $($process.ExitCode)" -ForegroundColor Red
-                            $SkipCuda = $true
-                        }
-
-                        # Cleanup
-                        Remove-Item $vsInstallerPath -ErrorAction SilentlyContinue
-
-                    } catch {
-                        Write-Host "[ERROR] Failed to download installer: $_" -ForegroundColor Red
-                        $SkipCuda = $true
-                    }
-                } else {
-                    Write-Host ""
-                    Write-Host "Skipping CUDA build. You can install manually from:" -ForegroundColor Gray
-                    Write-Host "https://visualstudio.microsoft.com/downloads/" -ForegroundColor Gray
-                    Write-Host "Select 'Desktop development with C++' workload" -ForegroundColor Gray
-                    $SkipCuda = $true
-                }
             }
         } else {
-            Write-Host "[OK] C++ compiler already in PATH" -ForegroundColor Green
+            Write-Host "[WARN] Visual Studio Build Tools not found." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Would you like to download and install Visual Studio Build Tools automatically?" -ForegroundColor Cyan
+            Write-Host "This will install the C++ build tools required for CUDA compilation." -ForegroundColor Gray
+            Write-Host ""
+            $response = Read-Host "Install now? (Y/N)"
+
+            if ($response -eq 'Y' -or $response -eq 'y') {
+                Write-Host ""
+                Write-Host "[INFO] Downloading Visual Studio Build Tools installer..." -ForegroundColor White
+                $vsInstallerUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+                $vsInstallerPath = Join-Path $env:TEMP "vs_buildtools.exe"
+
+                try {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    Invoke-WebRequest -Uri $vsInstallerUrl -OutFile $vsInstallerPath -UseBasicParsing
+                    Write-Host "[OK] Downloaded installer" -ForegroundColor Green
+
+                    Write-Host ""
+                    Write-Host "[INFO] Installing Visual Studio Build Tools with C++ workload..." -ForegroundColor White
+                    Write-Host "       This may take 5-15 minutes. Please wait..." -ForegroundColor Gray
+                    Write-Host ""
+
+                    $installArgs = @(
+                        "--quiet",
+                        "--wait",
+                        "--norestart",
+                        "--nocache",
+                        "--add", "Microsoft.VisualStudio.Workload.VCTools",
+                        "--includeRecommended"
+                    )
+
+                    $process = Start-Process -FilePath $vsInstallerPath -ArgumentList $installArgs -Wait -PassThru
+
+                    if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
+                        Write-Host "[OK] Visual Studio Build Tools installed successfully!" -ForegroundColor Green
+
+                        if ($process.ExitCode -eq 3010) {
+                            Write-Host "[NOTE] A restart is recommended but not required." -ForegroundColor Yellow
+                        }
+
+                        # Re-check for vcvars
+                        $vsCheck = Test-VsBuildTools
+                        if ($vsCheck.Found -and $vsCheck.Path) {
+                            Set-VsEnvironment -VcvarsPath $vsCheck.Path | Out-Null
+                            Write-Host "[OK] Ready to build!" -ForegroundColor Green
+                        } else {
+                            Write-Host "[WARN] Please restart this script after installation." -ForegroundColor Yellow
+                            $SkipCuda = $true
+                        }
+                    } else {
+                        Write-Host "[ERROR] Installation failed with exit code: $($process.ExitCode)" -ForegroundColor Red
+                        $SkipCuda = $true
+                    }
+
+                    Remove-Item $vsInstallerPath -ErrorAction SilentlyContinue
+
+                } catch {
+                    Write-Host "[ERROR] Failed to download installer: $_" -ForegroundColor Red
+                    $SkipCuda = $true
+                }
+            } else {
+                Write-Host ""
+                Write-Host "Skipping CUDA build. Install manually from:" -ForegroundColor Gray
+                Write-Host "https://visualstudio.microsoft.com/downloads/" -ForegroundColor Gray
+                $SkipCuda = $true
+            }
         }
     }
 
@@ -245,7 +248,6 @@ if (-not $SkipCuda) {
         if (-not (Test-Path $cudaProjectDir)) {
             Write-Host "[INFO] Downloading CUDA project..." -ForegroundColor White
 
-            # Try git first, fall back to zip download
             $gitPath = Get-Command git -ErrorAction SilentlyContinue
             $downloaded = $false
 
@@ -258,19 +260,16 @@ if (-not $SkipCuda) {
             }
 
             if (-not $downloaded) {
-                # Download as zip (no git required)
                 $zipUrl = "https://github.com/Danukeru/torv3_vanity_addr_cuda/archive/refs/heads/master.zip"
                 $zipFile = Join-Path $ScriptDir "cuda_project.zip"
 
                 try {
-                    Write-Host "[INFO] Downloading from GitHub (no git required)..." -ForegroundColor White
+                    Write-Host "[INFO] Downloading from GitHub..." -ForegroundColor White
                     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
                     Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
 
-                    Write-Host "[INFO] Extracting..." -ForegroundColor White
                     Expand-Archive -Path $zipFile -DestinationPath $ScriptDir -Force
 
-                    # Rename extracted folder (GitHub adds -master suffix)
                     $extractedDir = Join-Path $ScriptDir "torv3_vanity_addr_cuda-master"
                     if (Test-Path $extractedDir) {
                         Rename-Item $extractedDir $cudaProjectDir
@@ -280,7 +279,7 @@ if (-not $SkipCuda) {
                     $downloaded = $true
                     Write-Host "[OK] Downloaded and extracted" -ForegroundColor Green
                 } catch {
-                    Write-Host "[ERROR] Failed to download CUDA project: $_" -ForegroundColor Red
+                    Write-Host "[ERROR] Failed to download: $_" -ForegroundColor Red
                 }
             }
 
@@ -288,10 +287,11 @@ if (-not $SkipCuda) {
                 Write-Host "[ERROR] Failed to get CUDA project" -ForegroundColor Red
                 $SkipCuda = $true
             }
+        } else {
+            Write-Host "[OK] CUDA project already present" -ForegroundColor Green
         }
 
         if (-not $SkipCuda) {
-            # Build CUDA project
             $cudaBuildDir = Join-Path $cudaProjectDir "build"
             if (-not (Test-Path $cudaBuildDir)) {
                 New-Item -ItemType Directory -Path $cudaBuildDir | Out-Null
@@ -301,20 +301,16 @@ if (-not $SkipCuda) {
             try {
                 Write-Host "[INFO] Configuring CUDA project..." -ForegroundColor White
 
-                # Temporarily allow errors (CMake warnings go to stderr)
                 $oldErrorAction = $ErrorActionPreference
                 $ErrorActionPreference = "Continue"
 
-                # Try different Visual Studio generators
                 $configured = $false
                 $generators = @(
                     "Visual Studio 17 2022",
-                    "Visual Studio 16 2019",
-                    "Visual Studio 15 2017"
+                    "Visual Studio 16 2019"
                 )
 
                 foreach ($gen in $generators) {
-                    # Clean CMake cache before trying new generator
                     Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
                     Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
@@ -327,19 +323,6 @@ if (-not $SkipCuda) {
                     }
                 }
 
-                if (-not $configured) {
-                    # Clean and try Ninja if VS fails
-                    Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
-                    Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
-
-                    Write-Host "[INFO] Trying Ninja..." -ForegroundColor Gray
-                    $output = & cmake .. -G Ninja 2>&1
-                    if ($LASTEXITCODE -eq 0) {
-                        $configured = $true
-                        Write-Host "[OK] Configured with Ninja" -ForegroundColor Green
-                    }
-                }
-
                 $ErrorActionPreference = $oldErrorAction
 
                 if ($configured) {
@@ -347,7 +330,6 @@ if (-not $SkipCuda) {
                     cmake --build . --config Release
 
                     if ($LASTEXITCODE -eq 0) {
-                        # Find and copy the executable
                         $cudaExe = Get-ChildItem -Path . -Recurse -Filter "vanity_torv3_cuda.exe" | Select-Object -First 1
                         if ($cudaExe) {
                             Copy-Item $cudaExe.FullName (Join-Path $distDir "vanity_torv3_cuda.exe") -Force
@@ -359,8 +341,7 @@ if (-not $SkipCuda) {
                         Write-Host "[ERROR] CUDA build failed" -ForegroundColor Red
                     }
                 } else {
-                    Write-Host "[ERROR] CMake configuration failed. Output:" -ForegroundColor Red
-                    Write-Host $output -ForegroundColor Gray
+                    Write-Host "[ERROR] CMake configuration failed" -ForegroundColor Red
                 }
             } finally {
                 Pop-Location
@@ -371,13 +352,12 @@ if (-not $SkipCuda) {
 }
 
 # ============================================
-# STEP 2: Build Rust GUI
+# STEP 2: Build Rust GUI and CLI
 # ============================================
 if (-not $SkipGui) {
-    Write-Host "=== Step 2: Building Rust GUI ===" -ForegroundColor Yellow
+    Write-Host "=== Step 2: Building Rust Application ===" -ForegroundColor Yellow
     Write-Host ""
 
-    # Check for Rust
     $rustPath = Get-Command rustc -ErrorAction SilentlyContinue
     if (-not $rustPath) {
         Write-Host "[ERROR] Rust not found. Install from: https://rustup.rs/" -ForegroundColor Red
@@ -385,24 +365,22 @@ if (-not $SkipGui) {
     }
     Write-Host "[OK] Rust found: $(rustc --version)" -ForegroundColor Green
 
-    # Build GUI (without cuda feature - uses external CUDA)
     Write-Host "[INFO] Building GUI..." -ForegroundColor White
     Push-Location $ScriptDir
     try {
-        cargo build -p t3v-gui --release
+        cargo build -p kore-vanity-gui --release 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -eq 0) {
-            Copy-Item "target\release\t3v-gui.exe" (Join-Path $distDir "t3v-gui.exe") -Force
+            Copy-Item "target\release\kore-vanity-gui.exe" (Join-Path $distDir "kore-vanity-gui.exe") -Force
             Write-Host "[OK] GUI built successfully" -ForegroundColor Green
         } else {
             Write-Host "[ERROR] GUI build failed" -ForegroundColor Red
             exit 1
         }
 
-        # Also build CLI
         Write-Host "[INFO] Building CLI..." -ForegroundColor White
-        cargo build -p tor-v3-vanity --bin t3v --release
+        cargo build -p kore-vanity --bin kore-vanity --release 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -eq 0) {
-            Copy-Item "target\release\t3v.exe" (Join-Path $distDir "t3v.exe") -Force
+            Copy-Item "target\release\kore-vanity.exe" (Join-Path $distDir "kore-vanity.exe") -Force
             Write-Host "[OK] CLI built successfully" -ForegroundColor Green
         }
     } finally {
@@ -427,13 +405,12 @@ foreach ($file in $files) {
 
 Write-Host ""
 Write-Host "Usage:" -ForegroundColor White
-Write-Host "  1. Run t3v-gui.exe" -ForegroundColor Gray
+Write-Host "  1. Run kore-vanity-gui.exe" -ForegroundColor Gray
 Write-Host "  2. Select GPU mode (requires vanity_torv3_cuda.exe in same folder)" -ForegroundColor Gray
 Write-Host "  3. Enter prefix and click Start" -ForegroundColor Gray
 Write-Host ""
 
 if (-not (Test-Path (Join-Path $distDir "vanity_torv3_cuda.exe"))) {
     Write-Host "[NOTE] CUDA generator not built. GPU mode will fall back to CPU." -ForegroundColor Yellow
-    Write-Host "       To enable GPU: Install CUDA + CMake, then run this script again." -ForegroundColor Gray
 }
 Write-Host ""

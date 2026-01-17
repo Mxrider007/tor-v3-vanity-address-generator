@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use tor_v3_vanity::backend::{
+use kore_vanity::backend::{
     select_backend, select_backend_with_config, BackendInfo, BackendMode, FoundKey,
     Progress, SearchFilter,
 };
@@ -98,7 +98,7 @@ impl VanityApp {
         let output_dir = directories::UserDirs::new()
             .and_then(|dirs| dirs.document_dir().map(|p| p.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("tor_vanity_keys")
+            .join("kore_vanity_keys")
             .display()
             .to_string();
 
@@ -271,7 +271,7 @@ impl eframe::App for VanityApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Tor V3 Vanity Generator");
+            ui.heading("Kore Vanity Generator");
             ui.separator();
 
             // Backend info
