@@ -174,12 +174,32 @@ if (-not $SkipCuda) {
         if ($vsCheck.Found) {
             Write-Host "[OK] Visual Studio Build Tools: $($vsCheck.Message)" -ForegroundColor Green
 
+            # Check if this is a newer VS version that CUDA doesn't officially support
+            $isNewerVS = $vsCheck.Message -match "\\18\\" -or $vsCheck.Message -match "2025" -or $vsCheck.Message -match "2026"
+
+            if ($isNewerVS -and -not $InstallVS) {
+                Write-Host ""
+                Write-Host "[WARN] Your Visual Studio version may not be officially supported by CUDA." -ForegroundColor Yellow
+                Write-Host "       CUDA 12.x officially supports VS 2017-2022." -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "Would you like to install VS 2022 Build Tools for better CUDA compatibility?" -ForegroundColor Cyan
+                Write-Host "(Your current VS will still be available, this adds VS 2022 alongside it)" -ForegroundColor Gray
+                Write-Host ""
+                $response = Read-Host "Install VS 2022 Build Tools? (Y/N)"
+                if ($response -eq 'Y' -or $response -eq 'y') {
+                    $InstallVS = $true
+                    $vsCheck = @{ Found = $false }
+                }
+            }
+
             # Configure environment if we found vcvars but cl.exe isn't in PATH yet
-            if ($vsCheck.Path) {
+            if ($vsCheck.Found -and $vsCheck.Path) {
                 Set-VsEnvironment -VcvarsPath $vsCheck.Path | Out-Null
                 Write-Host "[OK] Visual Studio environment configured" -ForegroundColor Green
             }
-        } else {
+        }
+
+        if (-not $vsCheck.Found) {
             # Skip prompt if -InstallVS flag is set
             $doInstall = $false
             if ($InstallVS) {
@@ -329,13 +349,15 @@ if (-not $SkipCuda) {
                     "Visual Studio 16 2019"
                 )
 
+                # CMake flags: allow unsupported compiler + suppress C4244 warnings
+                $cmakeFlags = "-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler -DCMAKE_C_FLAGS=/W3 /wd4244 -DCMAKE_CXX_FLAGS=/W3 /wd4244"
+
                 foreach ($gen in $generators) {
                     Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
                     Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
                     Write-Host "[INFO] Trying $gen..." -ForegroundColor Gray
-                    # Allow unsupported compiler for newer VS versions (VS 2026+)
-                    $output = & cmake .. -G $gen -A x64 -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" 2>&1
+                    $output = & cmake .. -G $gen -A x64 $cmakeFlags.Split(' ') 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         $configured = $true
                         Write-Host "[OK] Configured with $gen" -ForegroundColor Green
@@ -349,7 +371,7 @@ if (-not $SkipCuda) {
                     Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
                     Write-Host "[INFO] Trying Ninja..." -ForegroundColor Gray
-                    $output = & cmake .. -G Ninja -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" 2>&1
+                    $output = & cmake .. -G Ninja $cmakeFlags.Split(' ') 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         $configured = $true
                         Write-Host "[OK] Configured with Ninja" -ForegroundColor Green
