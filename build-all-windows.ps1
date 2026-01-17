@@ -308,23 +308,41 @@ if (-not $SkipCuda) {
                 $ErrorActionPreference = "Continue"
 
                 $configured = $false
-                $generators = @(
-                    "Visual Studio 18 2025",
-                    "Visual Studio 17 2022",
-                    "Visual Studio 16 2019",
-                    "Ninja"
-                )
 
-                foreach ($gen in $generators) {
-                    Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
-                    Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
+                # First try: Let CMake auto-detect the generator
+                Write-Host "[INFO] Trying CMake auto-detect..." -ForegroundColor Gray
+                Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
+                Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
-                    Write-Host "[INFO] Trying $gen..." -ForegroundColor Gray
-                    $output = & cmake .. -G $gen -A x64 2>&1
-                    if ($LASTEXITCODE -eq 0) {
-                        $configured = $true
-                        Write-Host "[OK] Configured with $gen" -ForegroundColor Green
-                        break
+                $output = & cmake .. -A x64 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $configured = $true
+                    Write-Host "[OK] Configured with auto-detected generator" -ForegroundColor Green
+                }
+
+                # Fallback: Try specific generators
+                if (-not $configured) {
+                    $generators = @(
+                        "Visual Studio 17 2022",
+                        "Visual Studio 16 2019",
+                        "Ninja"
+                    )
+
+                    foreach ($gen in $generators) {
+                        Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
+                        Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
+
+                        Write-Host "[INFO] Trying $gen..." -ForegroundColor Gray
+                        if ($gen -eq "Ninja") {
+                            $output = & cmake .. -G $gen 2>&1
+                        } else {
+                            $output = & cmake .. -G $gen -A x64 2>&1
+                        }
+                        if ($LASTEXITCODE -eq 0) {
+                            $configured = $true
+                            Write-Host "[OK] Configured with $gen" -ForegroundColor Green
+                            break
+                        }
                     }
                 }
 
