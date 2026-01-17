@@ -349,15 +349,16 @@ if (-not $SkipCuda) {
                     "Visual Studio 16 2019"
                 )
 
-                # CMake flags: allow unsupported compiler + suppress C4244 warnings
-                $cmakeFlags = "-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler -DCMAKE_C_FLAGS=/W3 /wd4244 -DCMAKE_CXX_FLAGS=/W3 /wd4244"
-
                 foreach ($gen in $generators) {
                     Remove-Item -Path "CMakeCache.txt" -ErrorAction SilentlyContinue
                     Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
                     Write-Host "[INFO] Trying $gen..." -ForegroundColor Gray
-                    $output = & cmake .. -G $gen -A x64 $cmakeFlags.Split(' ') 2>&1
+                    # Allow unsupported compiler + suppress C4244 warnings
+                    $output = & cmake .. -G $gen -A x64 `
+                        "-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler" `
+                        "-DCMAKE_C_FLAGS=/w" `
+                        "-DCMAKE_CXX_FLAGS=/w" 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         $configured = $true
                         Write-Host "[OK] Configured with $gen" -ForegroundColor Green
@@ -371,7 +372,10 @@ if (-not $SkipCuda) {
                     Remove-Item -Path "CMakeFiles" -Recurse -ErrorAction SilentlyContinue
 
                     Write-Host "[INFO] Trying Ninja..." -ForegroundColor Gray
-                    $output = & cmake .. -G Ninja $cmakeFlags.Split(' ') 2>&1
+                    $output = & cmake .. -G Ninja `
+                        "-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler" `
+                        "-DCMAKE_C_FLAGS=/w" `
+                        "-DCMAKE_CXX_FLAGS=/w" 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         $configured = $true
                         Write-Host "[OK] Configured with Ninja" -ForegroundColor Green
