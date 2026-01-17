@@ -201,6 +201,9 @@ if (-not $SkipCuda) {
                         "--norestart",
                         "--nocache",
                         "--add", "Microsoft.VisualStudio.Workload.VCTools",
+                        "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                        "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621",
+                        "--add", "Microsoft.VisualStudio.Component.VC.CMake.Project",
                         "--includeRecommended"
                     )
 
