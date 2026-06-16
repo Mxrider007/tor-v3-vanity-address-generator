@@ -1,5 +1,14 @@
 /target
-*.onion
 target/
 dist/
 *.zip
+
+# Generated Tor hidden-service key material — NEVER commit these.
+*.onion
+keys/
+hs_ed25519_secret_key
+hs_ed25519_public_key
+hostname
+
+# External CUDA project downloaded by build-all-windows.ps1
+torv3_vanity_addr_cuda/

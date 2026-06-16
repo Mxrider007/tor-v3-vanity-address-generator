@@ -21,8 +21,13 @@ test = false
 bench = false
 path = "src/main.rs"
 
+# By default the CLI/library build CPU-only plus the *external* CUDA backend
+# (which just spawns the standalone `vanity_torv3_cuda` binary and needs no CUDA
+# toolkit to compile). This links on any machine. Enable `--features cuda` for
+# the built-in rustacuda GPU/hybrid backends, which require the CUDA toolkit and
+# a working `libcuda` to link.
 [features]
-default = ["cuda"]
+default = []
 cuda = ["dep:rustacuda", "dep:kore-vanity-core"]
 ptx-builder = ["dep:ptx-builder"]
 

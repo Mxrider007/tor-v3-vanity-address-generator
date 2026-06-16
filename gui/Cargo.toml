@@ -31,8 +31,3 @@ rfd = "0.15"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
-
-[profile.release]
-lto = true
-strip = true
-opt-level = 3

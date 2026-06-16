@@ -1,12 +1,13 @@
 //! Hybrid CPU+GPU backend for maximum throughput
 //!
-//! Runs both CPU and GPU backends simultaneously, combining their speeds.
+//! Runs both the CPU and the built-in CUDA backends simultaneously, combining
+//! their speeds. They share a single `remaining` prefix set so each prefix is
+//! reported exactly once, regardless of which side finds it first.
 
-use crate::onion::pubkey_to_onion;
-use crate::FILE_PREFIX;
-use crossbeam_channel::{Receiver, Sender};
+use crate::onion::{expanded_secret_key_from_seed, pubkey_to_onion, write_hidden_service_dir};
+use crate::pattern::{contains_pattern, is_valid_pattern, matches_prefix};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,7 +15,7 @@ use std::time::Instant;
 
 use super::cpu::CpuBackend;
 use super::cuda::CudaBackend;
-use super::{BackendInfo, FoundKey, GeneratorError, Progress};
+use super::{BackendInfo, FoundKey, GeneratorError, Progress, SearchFilter};
 
 /// Hybrid backend that runs CPU and GPU in parallel
 #[derive(Debug, Clone)]
@@ -68,14 +69,29 @@ impl HybridBackend {
         result_tx: Sender<FoundKey>,
         stop_rx: Receiver<()>,
     ) -> Result<(), GeneratorError> {
-        // Validate prefixes
+        self.generate_with_filter(
+            prefixes, output_dir, progress_tx, result_tx, stop_rx, SearchFilter::default(),
+        )
+    }
+
+    /// Start generation on both CPU and GPU, honoring the search filter.
+    ///
+    /// The CPU half handles the full pattern language (`?` wildcards, `contains`,
+    /// `anywhere`). The GPU half only accelerates literal start-anchored prefixes,
+    /// so it is given the subset of prefixes without wildcards (and is skipped
+    /// entirely when `anywhere` is set or every prefix uses a wildcard).
+    pub fn generate_with_filter(
+        &self,
+        prefixes: Vec<String>,
+        output_dir: PathBuf,
+        progress_tx: Sender<Progress>,
+        result_tx: Sender<FoundKey>,
+        stop_rx: Receiver<()>,
+        filter: SearchFilter,
+    ) -> Result<(), GeneratorError> {
+        // Validate prefixes (allows a-z, 2-7, ? as wildcard)
         for prefix in &prefixes {
-            if base32::decode(
-                base32::Alphabet::Rfc4648Lower { padding: false },
-                &format!("{}aa", prefix),
-            )
-            .is_none()
-            {
+            if !is_valid_pattern(prefix) {
                 return Err(GeneratorError::InvalidPrefix(prefix.clone()));
             }
         }
@@ -85,39 +101,40 @@ impl HybridBackend {
             Arc::new(Mutex::new(prefixes.clone().into_iter().collect()));
         let cpu_counter = Arc::new(AtomicU64::new(0));
         let gpu_counter = Arc::new(AtomicU64::new(0));
+        let prefix_match_counter = Arc::new(AtomicU64::new(0));
+        let contains_reject_counter = Arc::new(AtomicU64::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
         let start_time = Instant::now();
 
-        // Create stop channels for each backend
-        let (cpu_stop_tx, cpu_stop_rx) = crossbeam_channel::bounded(1);
-        let (gpu_stop_tx, gpu_stop_rx) = crossbeam_channel::bounded(1);
-
-        // Spawn CPU worker threads
+        // Spawn CPU worker threads (handle the full pattern language).
         let cpu_handles = self.spawn_cpu_workers(
-            prefixes.clone(),
             output_dir.clone(),
             result_tx.clone(),
             remaining.clone(),
             cpu_counter.clone(),
+            prefix_match_counter.clone(),
+            contains_reject_counter.clone(),
             stopped.clone(),
-            cpu_stop_rx,
+            filter.clone(),
         );
 
-        // Spawn GPU worker threads
-        let gpu_handle = self.spawn_gpu_workers(
+        // Spawn the GPU half (literal prefixes only).
+        let gpu_handle = Self::spawn_gpu_workers(
             prefixes,
             output_dir,
             result_tx.clone(),
             remaining.clone(),
             gpu_counter.clone(),
             stopped.clone(),
-            gpu_stop_rx,
+            filter,
         );
 
         // Progress reporting
         let progress_stopped = stopped.clone();
         let progress_cpu_counter = cpu_counter.clone();
         let progress_gpu_counter = gpu_counter.clone();
+        let progress_prefix_counter = prefix_match_counter.clone();
+        let progress_reject_counter = contains_reject_counter.clone();
         let progress_remaining = remaining.clone();
 
         let progress_handle = std::thread::spawn(move || {
@@ -137,8 +154,8 @@ impl HybridBackend {
                     keys_checked: total_keys,
                     keys_per_sec,
                     elapsed_secs: elapsed,
-                    prefix_matches: 0,
-                    contains_rejects: 0,
+                    prefix_matches: progress_prefix_counter.load(Ordering::Relaxed),
+                    contains_rejects: progress_reject_counter.load(Ordering::Relaxed),
                 });
 
                 if progress_remaining.lock().unwrap().is_empty() {
@@ -149,17 +166,15 @@ impl HybridBackend {
             }
         });
 
-        // Handle stop signal
+        // Handle stop signal from the caller.
         let stop_stopped = stopped.clone();
         std::thread::spawn(move || {
             if stop_rx.recv().is_ok() {
                 stop_stopped.store(true, Ordering::SeqCst);
-                let _ = cpu_stop_tx.send(());
-                let _ = gpu_stop_tx.send(());
             }
         });
 
-        // Wait for completion
+        // Wait for completion (all prefixes found, or stopped).
         loop {
             if remaining.lock().unwrap().is_empty() || stopped.load(Ordering::SeqCst) {
                 stopped.store(true, Ordering::SeqCst);
@@ -184,34 +199,40 @@ impl HybridBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_cpu_workers(
         &self,
-        prefixes: Vec<String>,
         output_dir: PathBuf,
         result_tx: Sender<FoundKey>,
         remaining: Arc<Mutex<HashSet<String>>>,
         counter: Arc<AtomicU64>,
+        prefix_match_counter: Arc<AtomicU64>,
+        contains_reject_counter: Arc<AtomicU64>,
         stopped: Arc<AtomicBool>,
-        _stop_rx: Receiver<()>,
+        filter: SearchFilter,
     ) -> Vec<std::thread::JoinHandle<()>> {
         let mut handles = Vec::new();
 
         for _ in 0..self.cpu_threads {
-            let prefixes = prefixes.clone();
             let output_dir = output_dir.clone();
             let result_tx = result_tx.clone();
             let remaining = remaining.clone();
             let counter = counter.clone();
+            let prefix_match_counter = prefix_match_counter.clone();
+            let contains_reject_counter = contains_reject_counter.clone();
             let stopped = stopped.clone();
+            let filter = filter.clone();
 
             let handle = std::thread::spawn(move || {
                 Self::cpu_worker(
-                    prefixes,
                     output_dir,
                     result_tx,
                     remaining,
                     counter,
+                    prefix_match_counter,
+                    contains_reject_counter,
                     stopped,
+                    filter,
                 );
             });
 
@@ -221,57 +242,66 @@ impl HybridBackend {
         handles
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn cpu_worker(
-        prefixes: Vec<String>,
         output_dir: PathBuf,
         result_tx: Sender<FoundKey>,
         remaining: Arc<Mutex<HashSet<String>>>,
         counter: Arc<AtomicU64>,
+        prefix_match_counter: Arc<AtomicU64>,
+        contains_reject_counter: Arc<AtomicU64>,
         stopped: Arc<AtomicBool>,
+        filter: SearchFilter,
     ) {
         while !stopped.load(Ordering::Relaxed) {
             if remaining.lock().unwrap().is_empty() {
                 break;
             }
 
-            // Generate random seed
+            // Generate random seed and keypair.
             let seed: [u8; 32] = rand::random();
-
-            // Create keypair
             let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-            let verifying_key = signing_key.verifying_key();
-            let pubkey_bytes: [u8; 32] = verifying_key.to_bytes();
-
-            // Generate onion address
+            let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
             let onion = pubkey_to_onion(&pubkey_bytes);
 
-            // Check against remaining prefixes
+            // Match against remaining prefixes with the full pattern language.
             let remaining_guard = remaining.lock().unwrap();
             let mut found_prefix = None;
             for prefix in remaining_guard.iter() {
-                if onion.starts_with(prefix) {
+                let matches = if filter.prefix_anywhere {
+                    contains_pattern(&onion, prefix)
+                } else {
+                    matches_prefix(&onion, prefix)
+                };
+                if matches {
                     found_prefix = Some(prefix.clone());
                     break;
                 }
             }
             drop(remaining_guard);
 
-            // If found, save and notify
             if let Some(prefix) = found_prefix {
-                remaining.lock().unwrap().remove(&prefix);
+                prefix_match_counter.fetch_add(1, Ordering::Relaxed);
 
-                let key_path = output_dir.join(&onion);
-                if let Ok(mut f) = std::fs::File::create(&key_path) {
-                    let expanded = signing_key.to_keypair_bytes();
-                    let _ = f.write_all(FILE_PREFIX);
-                    let _ = f.write_all(&expanded);
-                    let _ = f.flush();
+                // Apply the contains filter.
+                if !filter.contains.iter().all(|w| contains_pattern(&onion, w)) {
+                    contains_reject_counter.fetch_add(1, Ordering::Relaxed);
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
 
-                    let _ = result_tx.send(FoundKey {
-                        prefix,
-                        onion_address: onion,
-                        key_path,
-                    });
+                // Claim the prefix; only the first to claim writes/reports it.
+                if remaining.lock().unwrap().remove(&prefix) {
+                    let expanded = expanded_secret_key_from_seed(&seed);
+                    if let Ok(hs_dir) =
+                        write_hidden_service_dir(&output_dir, &onion, &pubkey_bytes, &expanded)
+                    {
+                        let _ = result_tx.send(FoundKey {
+                            prefix,
+                            onion_address: onion,
+                            key_path: hs_dir,
+                        });
+                    }
                 }
             }
 
@@ -280,46 +310,79 @@ impl HybridBackend {
     }
 
     fn spawn_gpu_workers(
-        &self,
         prefixes: Vec<String>,
         output_dir: PathBuf,
         result_tx: Sender<FoundKey>,
         remaining: Arc<Mutex<HashSet<String>>>,
         counter: Arc<AtomicU64>,
         stopped: Arc<AtomicBool>,
-        _stop_rx: Receiver<()>,
+        filter: SearchFilter,
     ) -> Option<std::thread::JoinHandle<()>> {
-        // Spawn GPU in a separate thread
+        // The GPU kernel only matches literal start-anchored prefixes. Skip it
+        // when matching anywhere; otherwise give it the wildcard-free prefixes.
+        let gpu_prefixes: Vec<String> = if filter.prefix_anywhere {
+            Vec::new()
+        } else {
+            prefixes.into_iter().filter(|p| !p.contains('?')).collect()
+        };
+        if gpu_prefixes.is_empty() {
+            return None;
+        }
+
         let handle = std::thread::spawn(move || {
-            // Create internal channels for GPU backend
-            let (internal_progress_tx, _internal_progress_rx) = crossbeam_channel::unbounded();
+            let cuda = match CudaBackend::new() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+
+            // Internal channels so we can bridge GPU output into shared state.
+            let (internal_progress_tx, internal_progress_rx) = unbounded::<Progress>();
+            let (internal_result_tx, internal_result_rx) = unbounded::<FoundKey>();
             let (internal_stop_tx, internal_stop_rx) = crossbeam_channel::bounded(1);
 
-            // Create a wrapper that updates our shared counter
-            let gpu_result_tx = result_tx;
-            let gpu_remaining = remaining;
-            let gpu_counter = counter;
-            let gpu_stopped = stopped;
+            // Forward GPU progress into the shared GPU counter.
+            let progress_counter = counter.clone();
+            std::thread::spawn(move || {
+                while let Ok(p) = internal_progress_rx.recv() {
+                    progress_counter.store(p.keys_checked, Ordering::Relaxed);
+                }
+            });
 
-            // We'll run the CUDA backend's internal logic here
-            if let Ok(cuda) = CudaBackend::new() {
-                // Monitor for stop
-                let monitor_stopped = gpu_stopped.clone();
-                std::thread::spawn(move || {
-                    while !monitor_stopped.load(Ordering::Relaxed) {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
+            // Bridge GPU results: claim in the shared set so each prefix is
+            // reported once across CPU and GPU.
+            let bridge_remaining = remaining.clone();
+            let bridge_result_tx = result_tx;
+            std::thread::spawn(move || {
+                while let Ok(found) = internal_result_rx.recv() {
+                    if bridge_remaining.lock().unwrap().remove(&found.prefix) {
+                        let _ = bridge_result_tx.send(found);
                     }
-                    let _ = internal_stop_tx.send(());
-                });
+                }
+            });
 
-                let _ = cuda.generate(
-                    prefixes,
-                    output_dir,
-                    internal_progress_tx,
-                    gpu_result_tx,
-                    internal_stop_rx,
-                );
-            }
+            // Stop the GPU when the shared state says we're done.
+            let monitor_stopped = stopped.clone();
+            let monitor_remaining = remaining.clone();
+            std::thread::spawn(move || {
+                loop {
+                    if monitor_stopped.load(Ordering::Relaxed)
+                        || monitor_remaining.lock().unwrap().is_empty()
+                    {
+                        let _ = internal_stop_tx.send(());
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            });
+
+            let _ = cuda.generate_with_filter(
+                gpu_prefixes,
+                output_dir,
+                internal_progress_tx,
+                internal_result_tx,
+                internal_stop_rx,
+                filter,
+            );
         });
 
         Some(handle)

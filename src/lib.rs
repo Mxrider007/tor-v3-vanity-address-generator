@@ -12,7 +12,7 @@ pub use backend::{
     select_backend, select_backend_with_mode, select_backend_with_config,
     Backend, BackendInfo, BackendMode, GeneratorError, FoundKey, Progress, SearchFilter, format_speed,
 };
-pub use onion::pubkey_to_onion;
+pub use onion::{expanded_secret_key_from_seed, pubkey_to_onion, write_hidden_service_dir};
 pub use probability::{
     calculate_stats, calculate_progress, format_duration_human, format_probability, format_number,
     effective_prefix_len, SearchStats, LiveStats, ProbabilityBreakdown,

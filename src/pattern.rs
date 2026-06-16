@@ -81,13 +81,6 @@ pub fn is_valid_pattern(pattern: &str) -> bool {
     true
 }
 
-/// Extract the non-wildcard prefix from a pattern (for CUDA tool)
-/// e.g., "????kore" -> "????kore" (passed as-is since CUDA supports it)
-/// e.g., "kore" -> "kore"
-pub fn get_cuda_pattern(pattern: &str) -> String {
-    pattern.to_uppercase()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

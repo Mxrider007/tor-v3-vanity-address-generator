@@ -45,15 +45,13 @@ struct Cli {
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum Mode {
-    /// Automatically select best backend (Hybrid > CUDA > CPU)
+    /// Automatically select best backend (Hybrid > CUDA > External CUDA > CPU)
     Auto,
     /// CPU only
     Cpu,
-    /// CUDA GPU only
-    #[cfg(feature = "cuda")]
+    /// GPU only (built-in CUDA if compiled, else the external CUDA binary)
     Cuda,
-    /// Hybrid CPU + GPU (maximum speed)
-    #[cfg(feature = "cuda")]
+    /// Hybrid CPU + GPU (requires the built-in `cuda` feature; otherwise external CUDA)
     Hybrid,
 }
 
@@ -62,9 +60,7 @@ impl From<Mode> for BackendMode {
         match mode {
             Mode::Auto => BackendMode::Auto,
             Mode::Cpu => BackendMode::Cpu,
-            #[cfg(feature = "cuda")]
             Mode::Cuda => BackendMode::Cuda,
-            #[cfg(feature = "cuda")]
             Mode::Hybrid => BackendMode::Hybrid,
         }
     }
@@ -79,9 +75,15 @@ fn main() {
         std::process::exit(1);
     }
 
+    // De-duplicate prefixes so the found/total counter stays consistent with the
+    // backends, which collect prefixes into a set.
+    let mut prefixes = cli.prefixes.clone();
+    prefixes.sort();
+    prefixes.dedup();
+
     // Validate prefixes (allows a-z, 2-7, and ? as wildcard)
-    let max_len = effective_prefix_len(&cli.prefixes);
-    for prefix in &cli.prefixes {
+    let max_len = effective_prefix_len(&prefixes);
+    for prefix in &prefixes {
         if !is_valid_pattern(prefix) {
             eprintln!("Error: '{}' is not a valid pattern (use a-z, 2-7, ? for wildcard)", prefix);
             std::process::exit(1);
@@ -97,7 +99,7 @@ fn main() {
     }
 
     println!("=== Kore Vanity Generator ===");
-    println!("Patterns: {:?}{}", cli.prefixes, if cli.anywhere { " (anywhere)" } else { "" });
+    println!("Patterns: {:?}{}", prefixes, if cli.anywhere { " (anywhere)" } else { "" });
     if !cli.contains.is_empty() {
         println!("Must contain: {:?}", cli.contains);
     }
@@ -140,8 +142,9 @@ fn main() {
     })
     .ok();
 
+    let total_prefixes = prefixes.len();
+
     // Clone values for threads
-    let prefixes = cli.prefixes.clone();
     let dst = cli.dst.clone();
     let filter = SearchFilter {
         contains: cli.contains.clone(),
@@ -158,7 +161,6 @@ fn main() {
     let start_time = Instant::now();
     let mut last_log = Instant::now();
     let mut found_count = 0;
-    let total_prefixes = cli.prefixes.len();
 
     loop {
         // Check for results
@@ -224,6 +226,18 @@ fn main() {
         if gen_handle.is_finished() {
             break;
         }
+    }
+
+    // Drain any results produced just as the loop exited.
+    while let Ok(result) = result_rx.try_recv() {
+        found_count += 1;
+        println!();
+        println!(
+            "*** FOUND [{}/{}]: {} -> {} ***",
+            found_count, total_prefixes, result.prefix, result.onion_address
+        );
+        println!("    Saved to: {}", result.key_path.display());
+        println!();
     }
 
     // Wait for generator

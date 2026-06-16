@@ -1,6 +1,6 @@
 //! Main application state and UI
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,7 +74,7 @@ impl BackendModeSelection {
         }
     }
 
-    fn to_backend_mode(&self) -> BackendMode {
+    fn to_backend_mode(self) -> BackendMode {
         match self {
             Self::Auto => BackendMode::Auto,
             Self::Cpu => BackendMode::Cpu,
@@ -346,7 +346,7 @@ impl eframe::App for VanityApp {
                     ui.label("CPU Threads:");
                     ui.add(
                         egui::Slider::new(&mut self.cpu_threads, 1..=self.max_threads)
-                            .clamp_to_range(true),
+                            .clamping(egui::SliderClamping::Always),
                     );
                 });
             }
@@ -403,18 +403,13 @@ impl eframe::App for VanityApp {
 
             // Start/Stop button
             ui.horizontal(|ui| {
-                let button_enabled = match self.state {
-                    AppState::Idle | AppState::Stopped | AppState::Finished => true,
-                    AppState::Running => true,
-                };
-
                 let button_text = match self.state {
                     AppState::Idle | AppState::Stopped | AppState::Finished => "Start Generation",
                     AppState::Running => "Stop",
                 };
 
                 if ui
-                    .add_enabled(button_enabled, egui::Button::new(button_text).min_size(egui::vec2(150.0, 30.0)))
+                    .add(egui::Button::new(button_text).min_size(egui::vec2(150.0, 30.0)))
                     .clicked()
                 {
                     match self.state {
@@ -629,18 +624,6 @@ fn format_speed(speed: u64) -> String {
         format!("{:.1}K", speed as f64 / 1_000.0)
     } else {
         format!("{}", speed)
-    }
-}
-
-fn format_large_number(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.2}B", n as f64 / 1_000_000_000.0)
-    } else if n >= 1_000_000 {
-        format!("{:.2}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.2}K", n as f64 / 1_000.0)
-    } else {
-        format!("{}", n)
     }
 }
 

@@ -1,13 +1,11 @@
 //! CPU backend using Rayon for parallel processing
 //! Supports wildcard patterns with `?` as single-character wildcard.
 
-use crate::onion::pubkey_to_onion;
+use crate::onion::{expanded_secret_key_from_seed, pubkey_to_onion, write_hidden_service_dir};
 use crate::pattern::{matches_prefix, contains_pattern, is_valid_pattern};
-use crate::{FILE_PREFIX, PUBKEY_PREFIX};
 use crossbeam_channel::{Receiver, Sender};
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -167,46 +165,13 @@ impl CpuBackend {
                         // Remove from remaining
                         remaining.lock().unwrap().remove(&prefix);
 
-                        // Create Tor hidden service directory structure
-                        let dir_name = onion.trim_end_matches(".onion");
-                        let hs_dir = output_dir.join(dir_name);
-
-                        if std::fs::create_dir_all(&hs_dir).is_ok() {
-                            // 1. Write hostname file
-                            let hostname_path = hs_dir.join("hostname");
-                            if let Ok(mut f) = std::fs::File::create(&hostname_path) {
-                                let _ = writeln!(f, "{}", onion);
-                            }
-
-                            // 2. Write hs_ed25519_public_key
-                            let pubkey_path = hs_dir.join("hs_ed25519_public_key");
-                            if let Ok(mut f) = std::fs::File::create(&pubkey_path) {
-                                let _ = f.write_all(PUBKEY_PREFIX);
-                                let _ = f.write_all(&pubkey_bytes);
-                            }
-
-                            // 3. Write hs_ed25519_secret_key
-                            // For CPU backend, we have the seed, so create proper expanded key
-                            let secret_path = hs_dir.join("hs_ed25519_secret_key");
-                            if let Ok(mut f) = std::fs::File::create(&secret_path) {
-                                // Tor expects: scalar (clamped) || nonce_prefix
-                                // ed25519_dalek derives these from SHA512(seed)
-                                use sha2::{Sha512, Digest};
-                                let hash = Sha512::digest(&seed);
-                                let mut expanded = [0u8; 64];
-                                expanded.copy_from_slice(&hash);
-                                // Clamp the scalar part (first 32 bytes)
-                                expanded[0] &= 248;
-                                expanded[31] &= 127;
-                                expanded[31] |= 64;
-                                let _ = f.write_all(FILE_PREFIX);
-                                let _ = f.write_all(&expanded);
-                            }
-
-                            // 4. Create authorized_clients directory
-                            let _ = std::fs::create_dir_all(hs_dir.join("authorized_clients"));
-
-                            // Send result
+                        // Write the full Tor hidden-service directory. The CPU
+                        // backend has the seed, so it derives the proper clamped
+                        // expanded secret key.
+                        let expanded = expanded_secret_key_from_seed(&seed);
+                        if let Ok(hs_dir) =
+                            write_hidden_service_dir(&output_dir, &onion, &pubkey_bytes, &expanded)
+                        {
                             let _ = result_tx.send(FoundKey {
                                 prefix,
                                 onion_address: onion,

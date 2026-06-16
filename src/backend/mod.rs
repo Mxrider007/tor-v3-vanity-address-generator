@@ -94,7 +94,7 @@ pub enum Backend {
 }
 
 /// Backend mode selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendMode {
     /// CPU only (always available)
     Cpu,
@@ -103,14 +103,10 @@ pub enum BackendMode {
     /// CPU + GPU combined (CUDA)
     Hybrid,
     /// Automatically select best available
+    #[default]
     Auto,
 }
 
-impl Default for BackendMode {
-    fn default() -> Self {
-        BackendMode::Auto
-    }
-}
 
 impl Backend {
     /// Get information about this backend
@@ -154,9 +150,9 @@ impl Backend {
             Backend::Cpu(b) => b.generate_with_filter(prefixes, output_dir, progress_tx, result_tx, stop_rx, filter),
             Backend::ExternalCuda(b) => b.generate_with_filter(prefixes, output_dir, progress_tx, result_tx, stop_rx, filter),
             #[cfg(feature = "cuda")]
-            Backend::Cuda(b) => b.generate(prefixes, output_dir, progress_tx, result_tx, stop_rx),
+            Backend::Cuda(b) => b.generate_with_filter(prefixes, output_dir, progress_tx, result_tx, stop_rx, filter),
             #[cfg(feature = "cuda")]
-            Backend::Hybrid(b) => b.generate(prefixes, output_dir, progress_tx, result_tx, stop_rx),
+            Backend::Hybrid(b) => b.generate_with_filter(prefixes, output_dir, progress_tx, result_tx, stop_rx, filter),
         }
     }
 }

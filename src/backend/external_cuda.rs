@@ -3,14 +3,13 @@
 //! This backend spawns an external CUDA process for GPU-accelerated generation.
 //! Supports wildcard patterns with `?` as single-character wildcard.
 
-use crate::onion::pubkey_to_onion;
+use crate::onion::{pubkey_to_onion, write_hidden_service_dir};
 use crate::pattern::{matches_prefix, contains_pattern, is_valid_pattern};
-use crate::{FILE_PREFIX, PUBKEY_PREFIX};
 use crossbeam_channel::{Receiver, Sender};
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use curve25519_dalek::Scalar;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -44,13 +43,11 @@ impl ExternalCudaBackend {
             Some(PathBuf::from("dist/vanity_torv3_cuda.exe")),
         ];
 
-        for path_opt in possible_paths.iter() {
-            if let Some(path) = path_opt {
-                if path.exists() {
-                    return Ok(Self {
-                        exe_path: path.clone(),
-                    });
-                }
+        for path in possible_paths.iter().flatten() {
+            if path.exists() {
+                return Ok(Self {
+                    exe_path: path.clone(),
+                });
             }
         }
 
@@ -111,7 +108,7 @@ impl ExternalCudaBackend {
         // Create output directory if needed
         if !output_dir.exists() {
             std::fs::create_dir_all(&output_dir)
-                .map_err(|e| GeneratorError::Io(e))?;
+                .map_err(GeneratorError::Io)?;
         }
 
         // Build command - convert prefixes to uppercase for the CUDA tool
@@ -208,7 +205,6 @@ impl ExternalCudaBackend {
             if line.starts_with("KEYRATE:") {
                 if let Some(rate_str) = line.strip_prefix("KEYRATE:") {
                     if let Some(mkeys) = rate_str
-                        .trim()
                         .split_whitespace()
                         .next()
                         .and_then(|s| s.parse::<f64>().ok())
@@ -275,40 +271,17 @@ impl ExternalCudaBackend {
                 // Remove from remaining
                 remaining.lock().unwrap().remove(&prefix);
 
-                // Create Tor hidden service directory structure
-                // Strip .onion suffix for directory name
-                let dir_name = onion.trim_end_matches(".onion");
-                let hs_dir = output_dir.join(dir_name);
+                // The external tool only yields the scalar `a` (already reduced
+                // mod L). Tor signs with the scalar directly without re-clamping,
+                // so `a || RH` is a valid expanded key for any RH; we use the
+                // public key as the (deterministic) nonce prefix RH.
+                let mut expanded = [0u8; 64];
+                expanded[..32].copy_from_slice(&scalar_bytes);
+                expanded[32..].copy_from_slice(&public_key_bytes);
 
-                if std::fs::create_dir_all(&hs_dir).is_ok() {
-                    // 1. Write hostname file
-                    let hostname_path = hs_dir.join("hostname");
-                    if let Ok(mut f) = std::fs::File::create(&hostname_path) {
-                        let _ = writeln!(f, "{}", onion);
-                    }
-
-                    // 2. Write hs_ed25519_public_key (32-byte tag + 32-byte pubkey)
-                    let pubkey_path = hs_dir.join("hs_ed25519_public_key");
-                    if let Ok(mut f) = std::fs::File::create(&pubkey_path) {
-                        let _ = f.write_all(PUBKEY_PREFIX);
-                        let _ = f.write_all(&public_key_bytes);
-                    }
-
-                    // 3. Write hs_ed25519_secret_key (32-byte tag + 64-byte expanded key)
-                    // expanded_secret_key = scalar (32 bytes) || nonce_prefix (32 bytes)
-                    // Since we only have the scalar from CUDA, use pubkey as nonce placeholder
-                    let secret_path = hs_dir.join("hs_ed25519_secret_key");
-                    if let Ok(mut f) = std::fs::File::create(&secret_path) {
-                        let mut expanded = [0u8; 64];
-                        expanded[..32].copy_from_slice(&scalar_bytes);
-                        expanded[32..].copy_from_slice(&public_key_bytes);
-                        let _ = f.write_all(FILE_PREFIX);
-                        let _ = f.write_all(&expanded);
-                    }
-
-                    // 4. Create authorized_clients directory (required by Tor)
-                    let _ = std::fs::create_dir_all(hs_dir.join("authorized_clients"));
-
+                if let Ok(hs_dir) =
+                    write_hidden_service_dir(&output_dir, &onion, &public_key_bytes, &expanded)
+                {
                     let _ = result_tx.send(FoundKey {
                         prefix,
                         onion_address: onion,

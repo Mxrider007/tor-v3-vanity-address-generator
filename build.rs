@@ -1,5 +1,3 @@
-use std::path::Path;
-
 fn main() {
     // Only run CUDA build steps if the cuda feature is enabled
     #[cfg(feature = "cuda")]
@@ -11,7 +9,7 @@ fn main() {
 #[cfg(feature = "cuda")]
 fn cuda_build() {
     use std::env;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     // Platform-specific CUDA library paths
     #[cfg(target_os = "windows")]

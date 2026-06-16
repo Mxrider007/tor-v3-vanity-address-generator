@@ -1,11 +1,10 @@
 //! CUDA GPU backend for high-speed key generation
 
-use crate::onion::pubkey_to_onion;
-use crate::FILE_PREFIX;
+use crate::onion::{expanded_secret_key_from_seed, pubkey_to_onion, write_hidden_service_dir};
+use crate::pattern::{contains_pattern, is_valid_pattern, matches_prefix};
 use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashSet;
 use std::ffi::CString;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,7 +15,7 @@ use rustacuda::memory::{DeviceBox, DeviceBuffer};
 use rustacuda::prelude::*;
 use kore_vanity_core as core;
 
-use super::{BackendInfo, FoundKey, GeneratorError, Progress};
+use super::{BackendInfo, FoundKey, GeneratorError, Progress, SearchFilter};
 
 /// CUDA GPU backend for high-speed vanity address generation
 #[derive(Debug, Clone)]
@@ -92,15 +91,45 @@ impl CudaBackend {
         result_tx: Sender<FoundKey>,
         stop_rx: Receiver<()>,
     ) -> Result<(), GeneratorError> {
-        // Validate prefixes
+        self.generate_with_filter(
+            prefixes, output_dir, progress_tx, result_tx, stop_rx, SearchFilter::default(),
+        )
+    }
+
+    /// Start GPU generation, applying the `contains` post-filter on each hit.
+    ///
+    /// The GPU kernel can only match a literal byte-prefix at the start of the
+    /// address, so `?` wildcards and `--anywhere` are rejected here (use the CPU
+    /// or hybrid backend for those). The `contains` words are applied host-side
+    /// after each GPU match.
+    pub fn generate_with_filter(
+        &self,
+        prefixes: Vec<String>,
+        output_dir: PathBuf,
+        progress_tx: Sender<Progress>,
+        result_tx: Sender<FoundKey>,
+        stop_rx: Receiver<()>,
+        filter: SearchFilter,
+    ) -> Result<(), GeneratorError> {
+        // Validate prefixes. The GPU kernel matches a literal byte-prefix, so it
+        // cannot honor `?` wildcards or `--anywhere`.
+        if filter.prefix_anywhere {
+            return Err(GeneratorError::Cuda(
+                "the built-in CUDA backend cannot match patterns 'anywhere'; \
+                 use --mode cpu or --mode hybrid"
+                    .to_string(),
+            ));
+        }
         for prefix in &prefixes {
-            if base32::decode(
-                base32::Alphabet::Rfc4648Lower { padding: false },
-                &format!("{}aa", prefix),
-            )
-            .is_none()
-            {
+            if !is_valid_pattern(prefix) {
                 return Err(GeneratorError::InvalidPrefix(prefix.clone()));
+            }
+            if prefix.contains('?') {
+                return Err(GeneratorError::Cuda(format!(
+                    "the built-in CUDA backend cannot match the '?' wildcard in '{}'; \
+                     use --mode cpu or --mode hybrid",
+                    prefix
+                )));
             }
         }
 
@@ -108,8 +137,11 @@ impl CudaBackend {
         let remaining: Arc<Mutex<HashSet<String>>> =
             Arc::new(Mutex::new(prefixes.clone().into_iter().collect()));
         let counter = Arc::new(AtomicU64::new(0));
+        let prefix_match_counter = Arc::new(AtomicU64::new(0));
+        let contains_reject_counter = Arc::new(AtomicU64::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
         let start_time = Instant::now();
+        let contains: Arc<Vec<String>> = Arc::new(filter.contains.clone());
 
         // Spawn a thread for each GPU
         let mut handles = Vec::new();
@@ -123,6 +155,9 @@ impl CudaBackend {
             let counter = counter.clone();
             let stopped = stopped.clone();
             let gpu_error = gpu_error.clone();
+            let contains = contains.clone();
+            let prefix_match_counter = prefix_match_counter.clone();
+            let contains_reject_counter = contains_reject_counter.clone();
 
             let handle = std::thread::spawn(move || {
                 if let Err(e) = Self::gpu_worker(
@@ -133,6 +168,9 @@ impl CudaBackend {
                     remaining,
                     counter,
                     stopped.clone(),
+                    contains,
+                    prefix_match_counter,
+                    contains_reject_counter,
                 ) {
                     eprintln!("GPU {} error: {}", device_idx, e);
                     *gpu_error.lock().unwrap() = Some(format!("GPU {} error: {}", device_idx, e));
@@ -147,6 +185,8 @@ impl CudaBackend {
         let progress_stopped = stopped.clone();
         let progress_counter = counter.clone();
         let progress_remaining = remaining.clone();
+        let progress_prefix_counter = prefix_match_counter.clone();
+        let progress_reject_counter = contains_reject_counter.clone();
         let progress_handle = std::thread::spawn(move || {
             while !progress_stopped.load(Ordering::Relaxed) {
                 let keys_checked = progress_counter.load(Ordering::Relaxed);
@@ -161,8 +201,8 @@ impl CudaBackend {
                     keys_checked,
                     keys_per_sec,
                     elapsed_secs: elapsed,
-                    prefix_matches: 0,
-                    contains_rejects: 0,
+                    prefix_matches: progress_prefix_counter.load(Ordering::Relaxed),
+                    contains_rejects: progress_reject_counter.load(Ordering::Relaxed),
                 });
 
                 // Check if done
@@ -209,6 +249,7 @@ impl CudaBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gpu_worker(
         device_idx: u32,
         prefixes: Vec<String>,
@@ -217,6 +258,9 @@ impl CudaBackend {
         remaining: Arc<Mutex<HashSet<String>>>,
         counter: Arc<AtomicU64>,
         stopped: Arc<AtomicBool>,
+        contains: Arc<Vec<String>>,
+        prefix_match_counter: Arc<AtomicU64>,
+        contains_reject_counter: Arc<AtomicU64>,
     ) -> Result<(), GeneratorError> {
         use rand::RngCore;
 
@@ -237,7 +281,7 @@ impl CudaBackend {
             .map_err(|e| GeneratorError::Cuda(format!("Failed to load module: {}", e)))?;
 
         let function = kernel
-            .get_function(std::ffi::CStr::from_bytes_with_nul(b"render\0").unwrap())
+            .get_function(c"render")
             .map_err(|e| GeneratorError::Cuda(format!("Failed to get function: {}", e)))?;
 
         let stream = Stream::new(StreamFlags::NON_BLOCKING, None)
@@ -292,7 +336,7 @@ impl CudaBackend {
         let threads = *[
             fn_max_threads,
             gpu_max_threads,
-            if fn_registers > 0 { gpu_max_registers / fn_registers } else { 256 },
+            gpu_max_registers.checked_div(fn_registers).unwrap_or(256),
         ]
         .iter()
         .min()
@@ -334,41 +378,48 @@ impl CudaBackend {
                 if success {
                     prefix.success.copy_from(&false).ok();
 
-                    let mut out = [0u8; 32];
-                    prefix.out.copy_to(&mut out).ok();
+                    // The PTX kernel writes the matching SEED into `out`.
+                    let mut seed = [0u8; 32];
+                    prefix.out.copy_to(&mut seed).ok();
 
-                    // Generate full keypair from seed
-                    let esk: ed25519_dalek::hazmat::ExpandedSecretKey =
-                        ed25519_dalek::hazmat::ExpandedSecretKey::from_bytes(&{
-                            let mut expanded = [0u8; 64];
-                            // The GPU outputs the scalar, we need to reconstruct
-                            expanded[..32].copy_from_slice(&out);
-                            expanded
-                        });
+                    // Derive the public key and onion from the seed (standard
+                    // ed25519 seed expansion).
+                    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+                    let pubkey_bytes = signing_key.verifying_key().to_bytes();
+                    let onion = pubkey_to_onion(&pubkey_bytes);
 
-                    // Actually we need to re-derive from the original approach
-                    // The GPU kernel outputs a modified seed that produces the match
-                    let signing_key = ed25519_dalek::SigningKey::from_bytes(&out);
-                    let verifying_key = signing_key.verifying_key();
-                    let onion = pubkey_to_onion(&verifying_key.to_bytes());
+                    let prefix_str = prefixes[i].clone();
 
-                    let prefix_str = &prefixes[i];
+                    // The kernel matches on raw pubkey bytes with a last-byte
+                    // mask, which can diverge from a base32-char prefix at the
+                    // boundary. Re-validate against the real address to reject
+                    // false positives.
+                    if !matches_prefix(&onion, &prefix_str) {
+                        continue;
+                    }
+                    prefix_match_counter.fetch_add(1, Ordering::Relaxed);
 
-                    // Remove from remaining
-                    remaining.lock().unwrap().remove(prefix_str);
+                    // Apply the host-side `contains` filter.
+                    if !contains.iter().all(|w| contains_pattern(&onion, w)) {
+                        contains_reject_counter.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
 
-                    // Save key file
-                    let key_path = output_dir.join(&onion);
-                    if let Ok(mut f) = std::fs::File::create(&key_path) {
-                        let expanded = signing_key.to_keypair_bytes();
-                        let _ = f.write_all(FILE_PREFIX);
-                        let _ = f.write_all(&expanded);
-                        let _ = f.flush();
+                    // Claim the prefix; skip if another GPU already took it.
+                    if !remaining.lock().unwrap().remove(&prefix_str) {
+                        continue;
+                    }
 
+                    // Write the proper Tor hidden-service directory (derives the
+                    // clamped expanded secret key from the seed).
+                    let expanded = expanded_secret_key_from_seed(&seed);
+                    if let Ok(hs_dir) =
+                        write_hidden_service_dir(&output_dir, &onion, &pubkey_bytes, &expanded)
+                    {
                         let _ = result_tx.send(FoundKey {
-                            prefix: prefix_str.clone(),
+                            prefix: prefix_str,
                             onion_address: onion,
-                            key_path,
+                            key_path: hs_dir,
                         });
                     }
                 }
@@ -392,22 +443,21 @@ struct BytePrefixOwned {
 
 impl BytePrefixOwned {
     fn from_str(s: &str) -> Self {
+        // Onion addresses are lowercase base32; match the kernel byte-prefix
+        // against the lowercased form. Validated (a-z, 2-7, no '?') by the caller.
         let byte_prefix = base32::decode(
             base32::Alphabet::Rfc4648Lower { padding: false },
-            &format!("{}aa", s),
+            &format!("{}aa", s.to_lowercase()),
         )
-        .expect("prefix must be base32");
+        .expect("prefix must be valid base32");
 
-        let mut last_byte_idx = 5 * s.len() / 8;
-        if last_byte_idx > 0 {
-            last_byte_idx -= 1;
-        }
+        let mut last_byte_idx = (5 * s.len() / 8).saturating_sub(1);
 
         let n_bits = (5 * s.len()) % 8;
         let last_byte_mask = ((1u16 << n_bits) - 1) as u8;
         let last_byte_mask = last_byte_mask << (8 - n_bits);
 
-        if last_byte_mask > 0 && last_byte_idx < byte_prefix.len() - 1 {
+        if last_byte_mask > 0 && last_byte_idx < byte_prefix.len().saturating_sub(1) {
             last_byte_idx += 1;
         }
 

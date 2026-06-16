@@ -44,7 +44,10 @@ pub fn calculate_stats(
 ) -> SearchStats {
     let breakdown = calculate_breakdown(prefix_len, contains_words);
 
-    let probability_per_key = breakdown.prefix_probability * breakdown.contains_probability;
+    // A probability is at most 1.0; the contains approximation (union bound) can
+    // otherwise overshoot for very short words and make expected_keys < 1.
+    let probability_per_key =
+        (breakdown.prefix_probability * breakdown.contains_probability).min(1.0);
     let expected_keys = if probability_per_key > 0.0 {
         1.0 / probability_per_key
     } else {
@@ -102,8 +105,10 @@ fn calculate_breakdown(prefix_len: usize, contains_words: &[String]) -> Probabil
             contains_positions.push(positions);
 
             // Probability word appears at any position (approximate, ignoring overlaps)
-            // Only fixed (non-wildcard) characters affect probability
-            let word_probability = (positions as f64) / BASE32_SIZE.powi(fixed_chars as i32);
+            // Only fixed (non-wildcard) characters affect probability. Clamp to 1.0
+            // since the union-bound estimate can exceed 1 for short words.
+            let word_probability =
+                ((positions as f64) / BASE32_SIZE.powi(fixed_chars as i32)).min(1.0);
             contains_probability *= word_probability;
         }
     }
@@ -134,7 +139,7 @@ pub fn calculate_progress(
     // Cumulative probability of having found a match by now
     // P(found) = 1 - (1 - p)^n ≈ 1 - e^(-n*p) for small p
     let cumulative_probability = if stats.probability_per_key > 0.0 {
-        1.0 - (-1.0 * keys_checked as f64 * stats.probability_per_key).exp()
+        1.0 - (-(keys_checked as f64) * stats.probability_per_key).exp()
     } else {
         0.0
     };
