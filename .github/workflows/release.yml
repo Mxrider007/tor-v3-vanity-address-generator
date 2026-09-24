@@ -1,0 +1,129 @@
+name: Release
+
+# Push a tag such as v1.0.0 to build and publish a release. The workflow can
+# also be started by hand for an existing tag (Actions > Release > Run workflow).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            os: windows-latest
+          - platform: linux-x64
+            os: ubuntu-22.04 # older glibc, so the binaries run on more distributions
+          - platform: macos-universal
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          if [ "$RUNNER_OS" = macOS ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          fi
+
+      - name: Check the version matches the tag
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Cargo.toml version $version does not match tag $TAG"
+            exit 1
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            cargo build --release --locked --workspace --target aarch64-apple-darwin
+            cargo build --release --locked --workspace --target x86_64-apple-darwin
+          else
+            cargo build --release --locked --workspace
+          fi
+
+      - name: Smoke test
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          ./target/release/kore-vanity --version
+          ./target/release/kore-vanity ab -o smoke-keys --gpu off
+          ./target/release/kore-vanity --verify smoke-keys/ab*
+          rm -rf smoke-keys
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Third-party licenses
+        shell: bash
+        run: cargo about generate --workspace --locked -o THIRD-PARTY-LICENSES.html about.hbs
+
+      - name: Package
+        shell: bash
+        run: packaging/package.sh "${{ matrix.platform }}" "$TAG"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release notes
+        run: packaging/release-notes.sh "$TAG" > notes.md
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/* --verify-tag \
+              --title "Kore Vanity ${TAG#v}" --notes-file notes.md
+          fi
