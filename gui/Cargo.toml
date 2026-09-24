@@ -1,9 +1,13 @@
 [package]
 name = "kore-vanity-gui"
-version = "0.1.0"
-edition = "2021"
-description = "GUI for Kore vanity address generator"
-license = "MIT"
+description = "Graphical interface for kore-vanity, the Tor v3 .onion vanity address generator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
 
 [[bin]]
 name = "kore-vanity-gui"
@@ -11,23 +15,15 @@ path = "src/main.rs"
 
 [features]
 default = []
-cuda = ["kore-vanity/cuda"]
+gpu = ["kore-vanity/gpu"]
 
 [dependencies]
-eframe = "0.29"
-egui = "0.29"
-
 kore-vanity = { path = "..", default-features = false }
-
-num_cpus = "1.16"
-crossbeam-channel = "0.5"
-chrono = "0.4"
-directories = "5"
+eframe = { version = "0.36", features = ["persistence"] }
+serde = { version = "1", features = ["derive"] }
+rfd = "0.17"
+directories = "6"
 open = "5"
-base32 = "0.5"
-
-[target.'cfg(windows)'.dependencies]
-rfd = "0.15"
 
 [target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+winresource = "0.1"

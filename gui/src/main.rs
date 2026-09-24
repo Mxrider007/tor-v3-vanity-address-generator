@@ -1,7 +1,6 @@
-//! Kore Vanity Generator GUI
-//!
-//! A graphical interface for generating Tor v3 vanity addresses.
+//! Kore Vanity — graphical Tor v3 vanity address generator.
 
+// Release builds are GUI-only on Windows: no console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
@@ -9,22 +8,20 @@ mod app;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+        .expect("the embedded icon is a valid PNG");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([600.0, 700.0])
-            .with_min_inner_size([500.0, 500.0])
-            .with_icon(load_icon()),
+            .with_title("Kore Vanity")
+            .with_app_id("kore-vanity")
+            .with_inner_size([760.0, 820.0])
+            .with_min_inner_size([560.0, 520.0])
+            .with_icon(icon),
         ..Default::default()
     };
-
     eframe::run_native(
-        "Kore Vanity Generator",
+        "Kore Vanity",
         options,
-        Box::new(|cc| Ok(Box::new(app::VanityApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     )
-}
-
-fn load_icon() -> egui::IconData {
-    // Default icon (can be replaced with actual icon data)
-    egui::IconData::default()
 }
