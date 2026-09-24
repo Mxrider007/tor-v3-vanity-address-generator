@@ -275,13 +275,15 @@ pub fn write_hidden_service_dir(output_dir: &Path, secret: &SecretKey) -> io::Re
 }
 
 fn create_private_dir(path: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        fs::DirBuilder::new().mode(0o700).create(path)
     }
-    builder.create(path)
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
+    }
 }
 
 fn write_new_file(path: &Path, contents: &[u8]) -> io::Result<()> {
