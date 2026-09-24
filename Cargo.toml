@@ -34,7 +34,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [features]
-default = ["cli"]
+default = ["cli", "gpu"]
 # The command-line program.
 cli = ["dep:clap", "dep:ctrlc", "dep:windows-sys"]
 # GPU acceleration through wgpu (Vulkan, DirectX 12 or Metal; any vendor).
