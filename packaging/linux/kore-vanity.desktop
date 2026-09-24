@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kore Vanity
+Comment=Tor v3 .onion vanity address generator
+Exec=kore-vanity-gui
+Icon=kore-vanity
+Terminal=false
+Categories=Network;Utility;

@@ -30,7 +30,8 @@ struct Settings {
     count: u32,
     output_dir: PathBuf,
     threads: usize,
-    use_gpu: bool,
+    /// Use the GPU; `None` means "only if it is a dedicated card".
+    use_gpu: Option<bool>,
     /// Speed measured during the last long-enough search.
     measured: Option<Measured>,
 }
@@ -56,7 +57,7 @@ impl Default for Settings {
             count: 1,
             output_dir: docs.join("Kore Vanity Keys"),
             threads: search::available_threads(),
-            use_gpu: true,
+            use_gpu: None,
             measured: None,
         }
     }
@@ -133,8 +134,14 @@ impl App {
             .or_else(|| gpus.iter().find(|_| search::software_gpu_allowed()))
     }
 
+    /// Whether the GPU will be used (defaults to dedicated cards only).
+    fn use_gpu(&self) -> bool {
+        self.best_gpu()
+            .is_some_and(|gpu| self.settings.use_gpu.unwrap_or(gpu.discrete))
+    }
+
     fn gpu_mode(&self) -> GpuMode {
-        if self.settings.use_gpu && self.best_gpu().is_some() {
+        if self.use_gpu() {
             GpuMode::On
         } else {
             GpuMode::Off
@@ -384,11 +391,17 @@ impl App {
                         ui.label(RichText::new("No compatible graphics card found — using the CPU.").weak());
                     }
                     (Some(_), Some(gpu)) => {
-                        ui.checkbox(
-                            &mut self.settings.use_gpu,
-                            format!("Also use the graphics card: {} ({})", gpu.name, gpu.backend),
-                        );
-                        if !gpu.discrete && self.settings.use_gpu {
+                        let mut use_gpu = self.use_gpu();
+                        if ui
+                            .checkbox(
+                                &mut use_gpu,
+                                format!("Also use the graphics card: {} ({})", gpu.name, gpu.backend),
+                            )
+                            .changed()
+                        {
+                            self.settings.use_gpu = Some(use_gpu);
+                        }
+                        if !gpu.discrete && use_gpu {
                             ui.label(
                                 RichText::new("This is integrated graphics; it may add little speed.")
                                     .small()
@@ -611,7 +624,7 @@ fn help_section(ui: &mut egui::Ui) {
         ui.label(
             "• 4–5 characters: seconds   • 6 characters: minutes   • 7 characters: about an hour",
         );
-        ui.label("• 8 characters: days   • 9+ characters: months or longer");
+        ui.label("• 8 characters: hours to a day   • 9+ characters: weeks or longer");
         ui.label("Searching for several patterns at once costs nothing extra.");
     });
 }
