@@ -130,6 +130,7 @@ impl App {
         gpus.iter()
             .find(|g| g.discrete)
             .or_else(|| gpus.iter().find(|g| !g.software))
+            .or_else(|| gpus.iter().find(|_| search::software_gpu_allowed()))
     }
 
     fn gpu_mode(&self) -> GpuMode {

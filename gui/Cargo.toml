@@ -14,7 +14,7 @@ name = "kore-vanity-gui"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["gpu"]
 gpu = ["kore-vanity/gpu"]
 
 [dependencies]

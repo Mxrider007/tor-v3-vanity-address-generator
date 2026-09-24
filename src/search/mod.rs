@@ -128,6 +128,15 @@ pub struct GpuInfo {
     pub software: bool,
 }
 
+/// Set this environment variable (to anything but `0`) to allow software
+/// GPUs such as Mesa's lavapipe. Only useful for testing.
+pub const SOFTWARE_GPU_ENV: &str = "KORE_VANITY_SOFTWARE_GPU";
+
+/// Whether [`SOFTWARE_GPU_ENV`] is set.
+pub fn software_gpu_allowed() -> bool {
+    std::env::var_os(SOFTWARE_GPU_ENV).is_some_and(|v| !v.is_empty() && v != "0")
+}
+
 /// List GPUs usable for the search (empty without the `gpu` feature).
 pub fn list_gpus() -> Vec<GpuInfo> {
     #[cfg(feature = "gpu")]
@@ -405,7 +414,11 @@ impl Shared {
         let chars = address_chars(&pubkey);
         let index = match self.matcher.check(&chars, |i| self.wants(i)) {
             MatchResult::Match(i) => i,
-            MatchResult::MissingContains | MatchResult::NoMatch => return false,
+            MatchResult::MissingContains => {
+                self.add_near_miss();
+                return false;
+            }
+            MatchResult::NoMatch => return false,
         };
         if !secret.self_test(&pubkey) {
             self.fail(

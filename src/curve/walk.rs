@@ -171,6 +171,12 @@ impl<'t> GroupWalker<'t> {
         self.center = Center::from_affine(x, y);
     }
 
+    /// Affine x and y (canonical bytes) of the next group's center.
+    #[cfg(test)]
+    pub(crate) fn next_center_bytes(&self) -> ([u8; 32], [u8; 32]) {
+        (self.center.x.to_bytes(), self.center.y.to_bytes())
+    }
+
     /// The full compressed public key of key `index` of the last group.
     pub(crate) fn pubkey(&self, index: usize) -> [u8; 32] {
         let c = self.current;
