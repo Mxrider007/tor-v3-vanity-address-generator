@@ -28,6 +28,6 @@ Version 1.0.0 removed that mode entirely.
 - `hs_ed25519_secret_key` *is* your onion address. Anyone with a copy can
   impersonate your service. Store it with restrictive permissions and keep an
   offline backup.
-- Generate keys on a machine you trust; Kore Vanity never uses the network.
+- Generate keys on a machine you trust; Tor V3 Vanity Address Generator never uses the network.
 - Verify downloads against `SHA256SUMS.txt` from the release page, or build
   from source.

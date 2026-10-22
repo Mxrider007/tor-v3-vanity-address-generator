@@ -1,5 +1,5 @@
 [package]
-name = "kore-vanity"
+name = "torv3-vanity"
 description = "Fast Tor v3 .onion vanity address generator for CPU and GPU, with a GUI and a command-line tool"
 version.workspace = true
 edition.workspace = true
@@ -10,7 +10,7 @@ authors.workspace = true
 readme = "README.md"
 keywords = ["tor", "onion", "vanity", "ed25519", "gpu"]
 categories = ["command-line-utilities", "cryptography"]
-default-run = "kore-vanity"
+default-run = "torv3-vanity"
 include = ["src/**", "gui/assets/icon.ico", "build.rs", "Cargo.toml", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [workspace]
@@ -21,15 +21,15 @@ version = "1.0.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-repository = "https://github.com/Mxrider420z/kore-vanity"
-authors = ["Mxrider420z"]
+repository = "https://github.com/Mxrider007/tor-v3-vanity-address-generator"
+authors = ["Mxrider007"]
 
 [lib]
-name = "kore_vanity"
+name = "torv3_vanity"
 path = "src/lib.rs"
 
 [[bin]]
-name = "kore-vanity"
+name = "torv3-vanity"
 path = "src/main.rs"
 required-features = ["cli"]
 

@@ -1,4 +1,4 @@
-//! `kore-vanity` — command-line Tor v3 vanity address generator.
+//! `torv3-vanity` — command-line Tor v3 vanity address generator.
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -8,31 +8,31 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, ValueEnum};
 
-use kore_vanity::estimate::{Estimate, format_count, format_duration, format_odds, format_rate};
-use kore_vanity::onion::verify_hidden_service_dir;
-use kore_vanity::pattern::{Matcher, Pattern, PatternError};
-use kore_vanity::search::{
+use torv3_vanity::estimate::{Estimate, format_count, format_duration, format_odds, format_rate};
+use torv3_vanity::onion::verify_hidden_service_dir;
+use torv3_vanity::pattern::{Matcher, Pattern, PatternError};
+use torv3_vanity::search::{
     Event, GpuMode, RateMeter, Search, SearchConfig, available_threads, list_gpus,
 };
 
 const EXAMPLES: &str = "\
 Examples:
-  kore-vanity kore                   address starting with \"kore\"
-  kore-vanity kore -o keys           ...saved in the folder \"keys\"
-  kore-vanity kore blog shop         several patterns at once
-  kore-vanity k?re                   ? matches any single character
-  kore-vanity kore -n 5              find 5 addresses to choose from
-  kore-vanity kore --anywhere        \"kore\" anywhere in the address
-  kore-vanity kore -c shop           starts with \"kore\" and contains \"shop\"
-  kore-vanity kore --estimate        how long will it take?
-  kore-vanity --verify keys/kore...  check a saved key folder
+  torv3-vanity shop                   address starting with \"shop\"
+  torv3-vanity shop -o keys           ...saved in the folder \"keys\"
+  torv3-vanity shop blog news         several patterns at once
+  torv3-vanity sh?p                   ? matches any single character
+  torv3-vanity shop -n 5              find 5 addresses to choose from
+  torv3-vanity shop --anywhere        \"shop\" anywhere in the address
+  torv3-vanity shop -c blog           starts with \"shop\" and contains \"blog\"
+  torv3-vanity shop --estimate        how long will it take?
+  torv3-vanity --verify keys/shop...  check a saved key folder
 
 Each extra character makes the search 32 times longer. Keep the
 hs_ed25519_secret_key file private: anyone who has it controls your address.";
 
 #[derive(Parser)]
 #[command(
-    name = "kore-vanity",
+    name = "torv3-vanity",
     version,
     about = "Generate Tor v3 .onion vanity addresses on the CPU and GPU.",
     after_help = EXAMPLES
@@ -117,11 +117,11 @@ impl From<GpuArg> for GpuMode {
 
 fn main() -> ExitCode {
     if std::env::args_os().len() == 1 && console::launched_from_explorer() {
-        println!("kore-vanity is a command-line program.");
-        println!("For the graphical version, open kore-vanity-gui.exe instead.\n");
+        println!("torv3-vanity is a command-line program.");
+        println!("For the graphical version, open torv3-vanity-gui.exe instead.\n");
         println!("To use it, open a terminal (PowerShell) in this folder and run for example:\n");
-        println!("    .\\kore-vanity.exe kore\n");
-        println!("Run  .\\kore-vanity.exe --help  to see all options.");
+        println!("    .\\torv3-vanity.exe shop\n");
+        println!("Run  .\\torv3-vanity.exe --help  to see all options.");
         console::pause();
         return ExitCode::SUCCESS;
     }
@@ -221,7 +221,7 @@ fn build_matcher(cli: &Cli) -> Result<Matcher, PatternError> {
 }
 
 fn print_header(cli: &Cli, matcher: &Matcher, estimate: &Estimate) {
-    eprintln!("kore-vanity {}", kore_vanity::VERSION);
+    eprintln!("torv3-vanity {}", torv3_vanity::VERSION);
     let place = if matcher.anywhere() {
         "anywhere in the address"
     } else {
@@ -446,7 +446,7 @@ fn measure_rate(threads: usize, gpu: GpuMode, duration: Duration) -> Result<f64,
 }
 
 fn benchmark(cli: &Cli, threads: usize, duration: Duration) -> Result<ExitCode, String> {
-    eprintln!("kore-vanity {} benchmark", kore_vanity::VERSION);
+    eprintln!("torv3-vanity {} benchmark", torv3_vanity::VERSION);
     eprintln!("CPU threads: {threads}");
     let rate = measure_rate(threads, cli.gpu.into(), duration)?;
     println!("{}", format_rate(rate));

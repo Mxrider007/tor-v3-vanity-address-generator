@@ -394,11 +394,11 @@ mod tests {
 
     #[test]
     fn parsing_and_normalization() {
-        assert_eq!(p(" KoRe ").as_str(), "kore");
-        assert_eq!(p("k?re").fixed_chars(), 3);
+        assert_eq!(p(" ShOp ").as_str(), "shop");
+        assert_eq!(p("sh?p").fixed_chars(), 3);
         assert_eq!(Pattern::parse(""), Err(PatternError::Empty));
         assert!(matches!(
-            Pattern::parse("kore0"),
+            Pattern::parse("shop0"),
             Err(PatternError::InvalidChar { ch: '0', .. })
         ));
         assert!(matches!(
@@ -406,7 +406,7 @@ mod tests {
             Err(PatternError::InvalidChar { ch: '*', .. })
         ));
         assert!(matches!(
-            Pattern::parse("kore.onion"),
+            Pattern::parse("shop.onion"),
             Err(PatternError::InvalidChar { ch: '.', .. })
         ));
         assert!(matches!(
@@ -421,24 +421,24 @@ mod tests {
             Pattern::parse(&"a".repeat(57)),
             Err(PatternError::TooLong { len: 57, .. })
         ));
-        let list = Pattern::parse_list("kore, test  kore,,abc").unwrap();
+        let list = Pattern::parse_list("shop, test  shop,,abc").unwrap();
         assert_eq!(
             list.iter().map(Pattern::as_str).collect::<Vec<_>>(),
-            ["kore", "test", "abc"]
+            ["shop", "test", "abc"]
         );
     }
 
     #[test]
     fn matching() {
-        let addr = b"koretestxyz";
-        assert!(p("kore").matches_start(addr));
-        assert!(p("k?re").matches_start(addr));
+        let addr = b"shoptestxyz";
+        assert!(p("shop").matches_start(addr));
+        assert!(p("sh?p").matches_start(addr));
         assert!(!p("test").matches_start(addr));
         assert!(p("test").matches_anywhere(addr));
         assert!(p("t?st").matches_anywhere(addr));
         assert!(p("????test").matches_start(addr));
         assert!(!p("xyzq").matches_anywhere(addr));
-        assert!(!p("koretestxyzab").matches_anywhere(addr));
+        assert!(!p("shoptestxyzab").matches_anywhere(addr));
     }
 
     #[test]
@@ -471,9 +471,9 @@ mod tests {
 
     #[test]
     fn probabilities() {
-        assert_eq!(p("kore").probability(false), 1.0 / 32f64.powi(4));
-        assert_eq!(p("k?re").probability(false), 1.0 / 32f64.powi(3));
-        let anywhere = p("kore").probability(true);
+        assert_eq!(p("shop").probability(false), 1.0 / 32f64.powi(4));
+        assert_eq!(p("sh?p").probability(false), 1.0 / 32f64.powi(3));
+        let anywhere = p("shop").probability(true);
         assert!(anywhere > 50.0 / 32f64.powi(4) && anywhere < 53.0 / 32f64.powi(4));
         assert_eq!(p(&format!("{}ad", "?".repeat(54))).probability(false), 0.25);
     }

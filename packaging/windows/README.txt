@@ -1,13 +1,13 @@
-Kore Vanity @VERSION@ - Tor v3 .onion vanity address generator
-https://github.com/Mxrider420z/kore-vanity
+Tor V3 Vanity Address Generator @VERSION@ - Tor v3 .onion vanity address generator
+https://github.com/Mxrider007/tor-v3-vanity-address-generator
 
 
 QUICK START
 -----------
-1. Double-click  kore-vanity-gui.exe
+1. Double-click  torv3-vanity-gui.exe
    If Windows says "Windows protected your PC", click "More info" and then
    "Run anyway". The program is not code-signed, which is why Windows asks.
-2. Type what your address should start with, for example:  kore
+2. Type what your address should start with, for example:  shop
 3. Click "Start search".
 4. When it is done, click "Show keys folder".
 
@@ -19,7 +19,7 @@ needed.
 WHAT YOU GET
 ------------
 Each address is saved as a folder named after it, by default in
-Documents\Kore Vanity Keys. The folder contains:
+Documents\Tor Vanity Keys. The folder contains:
 
   hostname               your new address (xxxxxxxx.onion)
   hs_ed25519_secret_key  the private key. KEEP IT SECRET AND BACK IT UP.
@@ -55,19 +55,19 @@ Copy the whole folder to the computer that runs Tor and add to its torrc:
 
 then restart Tor. On Linux the folder is usually placed in /var/lib/tor/,
 owned by the Tor user, with permissions 700. Full guide:
-https://github.com/Mxrider420z/kore-vanity#using-your-address-with-tor
+https://github.com/Mxrider007/tor-v3-vanity-address-generator#using-your-address-with-tor
 
 
 COMMAND LINE
 ------------
-kore-vanity.exe is the command-line version. Open PowerShell in this folder
+torv3-vanity.exe is the command-line version. Open PowerShell in this folder
 (in File Explorer type "powershell" into the address bar and press Enter)
 and run, for example:
 
-  .\kore-vanity.exe kore
-  .\kore-vanity.exe kore blog -n 3 -o C:\onion-keys
-  .\kore-vanity.exe kore --estimate
-  .\kore-vanity.exe --help
+  .\torv3-vanity.exe shop
+  .\torv3-vanity.exe shop blog -n 3 -o C:\onion-keys
+  .\torv3-vanity.exe shop --estimate
+  .\torv3-vanity.exe --help
 
 
 LICENSE

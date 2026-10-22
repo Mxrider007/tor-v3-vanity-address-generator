@@ -209,7 +209,7 @@ impl SecretKey {
             scalar: Scalar::from_bytes_mod_order(*self.scalar()),
             hash_prefix: *self.hash_prefix(),
         };
-        let message = b"kore-vanity key self-test";
+        let message = b"torv3-vanity key self-test";
         let signature = raw_sign::<Sha512>(&esk, message, &verifying_key);
         verifying_key.verify_strict(message, &signature).is_ok()
     }
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn writes_and_verifies_hidden_service_dir() {
-        let dir = std::env::temp_dir().join(format!("kore-vanity-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("torv3-vanity-test-{}", std::process::id()));
         remove_test_dir(&dir);
         let secret = random_key();
         let hs_dir = write_hidden_service_dir(&dir, &secret).unwrap();

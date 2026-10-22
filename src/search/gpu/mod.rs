@@ -200,7 +200,7 @@ fn to_bytes(words: &[u32]) -> Vec<u8> {
 impl Gpu {
     fn new(adapter: &wgpu::Adapter, max_threads: u32, max_filters: usize) -> Result<Gpu, String> {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("kore-vanity"),
+            label: Some("torv3-vanity"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
@@ -227,11 +227,11 @@ impl Gpu {
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kore-vanity kernel"),
+            label: Some("torv3-vanity kernel"),
             source: wgpu::ShaderSource::Wgsl(shader::source(GROUP).into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("kore-vanity search"),
+            label: Some("torv3-vanity search"),
             layout: None,
             module: &module,
             entry_point: Some("search"),
@@ -285,7 +285,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("kore-vanity bindings"),
+            label: Some("torv3-vanity bindings"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
                 wgpu::BindGroupEntry {

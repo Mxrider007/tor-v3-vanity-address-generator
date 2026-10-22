@@ -95,7 +95,7 @@ pub enum Event {
 pub enum SearchError {
     #[error("nothing to search with: use at least one CPU thread or a GPU")]
     NoWorkers,
-    #[error("this build of kore-vanity has no GPU support")]
+    #[error("this build of torv3-vanity has no GPU support")]
     NoGpuSupport,
     #[error("could not start a worker thread: {0}")]
     Thread(#[from] std::io::Error),
@@ -130,7 +130,7 @@ pub struct GpuInfo {
 
 /// Set this environment variable (to anything but `0`) to allow software
 /// GPUs such as Mesa's lavapipe. Only useful for testing.
-pub const SOFTWARE_GPU_ENV: &str = "KORE_VANITY_SOFTWARE_GPU";
+pub const SOFTWARE_GPU_ENV: &str = "TORV3_VANITY_SOFTWARE_GPU";
 
 /// Whether [`SOFTWARE_GPU_ENV`] is set.
 pub fn software_gpu_allowed() -> bool {
@@ -191,7 +191,7 @@ impl Search {
         for i in 0..config.cpu_threads {
             let worker_shared = Arc::clone(&shared);
             let handle = std::thread::Builder::new()
-                .name(format!("kore-cpu-{i}"))
+                .name(format!("vanity-cpu-{i}"))
                 .spawn(move || cpu::run(&worker_shared));
             match handle {
                 Ok(h) => workers.push(h),
@@ -208,14 +208,14 @@ impl Search {
             let cpu_threads = config.cpu_threads;
             workers.push(
                 std::thread::Builder::new()
-                    .name("kore-gpu".into())
+                    .name("vanity-gpu".into())
                     .spawn(move || gpu::run(&shared, mode, cpu_threads))?,
             );
         }
 
         let supervisor_shared = Arc::clone(&shared);
         let supervisor = std::thread::Builder::new()
-            .name("kore-supervisor".into())
+            .name("vanity-supervisor".into())
             .spawn(move || {
                 for worker in workers {
                     if worker.join().is_err() {

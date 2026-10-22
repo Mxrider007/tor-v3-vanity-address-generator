@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn expected_keys() {
-        let e = Estimate::new(&matcher(&["kore"], &[]), Some(1));
+        let e = Estimate::new(&matcher(&["shop"], &[]), Some(1));
         assert_eq!(e.expected_keys(), 32f64.powi(4));
         // The rarest pattern dominates.
         let e = Estimate::new(&matcher(&["ab", "abcde"], &[]), Some(2));
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn chances() {
-        let e = Estimate::new(&matcher(&["kore"], &[]), Some(1));
+        let e = Estimate::new(&matcher(&["shop"], &[]), Some(1));
         let median = e.keys_for_chance(0.5);
         assert!((e.chance_after(median) - 0.5).abs() < 1e-9);
         assert!((e.chance_after(e.keys_for_chance(0.9)) - 0.9).abs() < 1e-9);

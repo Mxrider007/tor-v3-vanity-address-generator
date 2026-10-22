@@ -5,13 +5,13 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
-use kore_vanity::estimate::{Estimate, format_count, format_duration, format_odds, format_rate};
-use kore_vanity::pattern::{Matcher, Pattern};
-use kore_vanity::search::{
+use torv3_vanity::estimate::{Estimate, format_count, format_duration, format_odds, format_rate};
+use torv3_vanity::pattern::{Matcher, Pattern};
+use torv3_vanity::search::{
     self, Event, Found, GpuInfo, GpuMode, RateMeter, Search, SearchConfig, Stats,
 };
 
-const REPO_URL: &str = "https://github.com/Mxrider420z/kore-vanity";
+const REPO_URL: &str = "https://github.com/Mxrider007/tor-v3-vanity-address-generator";
 
 /// Rough keys/second per CPU thread, used for estimates before the first run.
 const GUESS_RATE_PER_THREAD: f64 = 4.0e6;
@@ -55,7 +55,7 @@ impl Default for Settings {
             contains: String::new(),
             anywhere: false,
             count: 1,
-            output_dir: docs.join("Kore Vanity Keys"),
+            output_dir: docs.join("Tor Vanity Keys"),
             threads: search::available_threads(),
             use_gpu: None,
             measured: None,
@@ -266,8 +266,8 @@ impl eframe::App for App {
         egui::Panel::top("header").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.heading(RichText::new("Kore Vanity").strong());
-                ui.label(RichText::new(format!("v{}", kore_vanity::VERSION)).weak());
+                ui.heading(RichText::new("Tor V3 Vanity Address Generator").strong());
+                ui.label(RichText::new(format!("v{}", torv3_vanity::VERSION)).weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.hyperlink_to("Help & source code", REPO_URL);
                 });
@@ -320,7 +320,7 @@ impl App {
                 ui.label(label);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.settings.patterns)
-                        .hint_text("e.g. kore")
+                        .hint_text("e.g. shop")
                         .desired_width(f32::INFINITY)
                         .font(egui::TextStyle::Monospace),
                 );
@@ -339,7 +339,7 @@ impl App {
                     ui.label("Must also contain (optional):");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.settings.contains)
-                            .hint_text("e.g. shop")
+                            .hint_text("e.g. blog")
                             .desired_width(f32::INFINITY)
                             .font(egui::TextStyle::Monospace),
                     );

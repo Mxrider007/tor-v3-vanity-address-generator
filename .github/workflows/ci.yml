@@ -59,9 +59,9 @@ jobs:
       - name: Install lavapipe
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
       - name: Compare the GPU kernel with the CPU and search on the GPU
-        run: cargo test -p kore-vanity --lib --locked -- --ignored
+        run: cargo test -p torv3-vanity --lib --locked -- --ignored
         env:
-          KORE_VANITY_SOFTWARE_GPU: "1"
+          TORV3_VANITY_SOFTWARE_GPU: "1"
 
   tor:
     name: Keys work in Tor
@@ -75,8 +75,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install Tor
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tor
-      - run: cargo build --release --locked -p kore-vanity
-      - run: scripts/tor-compat-test.sh target/release/kore-vanity
+      - run: cargo build --release --locked -p torv3-vanity
+      - run: scripts/tor-compat-test.sh target/release/torv3-vanity
 
   msrv:
     name: Minimum Rust version (1.95)

@@ -1,6 +1,6 @@
 [package]
-name = "kore-vanity-gui"
-description = "Graphical interface for kore-vanity, the Tor v3 .onion vanity address generator"
+name = "torv3-vanity-gui"
+description = "Graphical interface for torv3-vanity, the Tor v3 .onion vanity address generator"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,15 +10,15 @@ authors.workspace = true
 publish = false
 
 [[bin]]
-name = "kore-vanity-gui"
+name = "torv3-vanity-gui"
 path = "src/main.rs"
 
 [features]
 default = ["gpu"]
-gpu = ["kore-vanity/gpu"]
+gpu = ["torv3-vanity/gpu"]
 
 [dependencies]
-kore-vanity = { path = "..", default-features = false }
+torv3-vanity = { path = "..", default-features = false }
 eframe = { version = "0.36", features = ["persistence", "glow"] }
 serde = { version = "1", features = ["derive"] }
 rfd = "0.17"

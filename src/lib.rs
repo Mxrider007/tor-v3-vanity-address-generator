@@ -1,18 +1,18 @@
-//! # kore-vanity
+//! # torv3-vanity
 //!
 //! Fast generator for Tor v3 `.onion` vanity addresses.
 //!
 //! ```no_run
-//! use kore_vanity::pattern::{Matcher, Pattern};
-//! use kore_vanity::search::{Event, GpuMode, Search, SearchConfig};
+//! use torv3_vanity::pattern::{Matcher, Pattern};
+//! use torv3_vanity::search::{Event, GpuMode, Search, SearchConfig};
 //! use std::time::Duration;
 //!
-//! let matcher = Matcher::new(vec![Pattern::parse("kore")?], false, vec![])?;
+//! let matcher = Matcher::new(vec![Pattern::parse("shop")?], false, vec![])?;
 //! let search = Search::start(SearchConfig {
 //!     matcher,
 //!     count: Some(1),
 //!     output_dir: "keys".into(),
-//!     cpu_threads: kore_vanity::search::available_threads(),
+//!     cpu_threads: torv3_vanity::search::available_threads(),
 //!     gpu: GpuMode::Auto,
 //! })?;
 //! loop {

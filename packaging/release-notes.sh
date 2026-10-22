@@ -19,11 +19,11 @@ cat <<NOTES
 
 | System | File |
 |---|---|
-| **Windows 10/11** (64-bit) | [\`kore-vanity-$tag-windows-x64.zip\`](https://github.com/Mxrider420z/kore-vanity/releases/download/$tag/kore-vanity-$tag-windows-x64.zip) |
-| **macOS 11+** (Apple Silicon and Intel) | [\`kore-vanity-$tag-macos-universal.zip\`](https://github.com/Mxrider420z/kore-vanity/releases/download/$tag/kore-vanity-$tag-macos-universal.zip) |
-| **Linux** (x86-64) | [\`kore-vanity-$tag-linux-x64.tar.gz\`](https://github.com/Mxrider420z/kore-vanity/releases/download/$tag/kore-vanity-$tag-linux-x64.tar.gz) |
+| **Windows 10/11** (64-bit) | [\`torv3-vanity-$tag-windows-x64.zip\`](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/download/$tag/torv3-vanity-$tag-windows-x64.zip) |
+| **macOS 11+** (Apple Silicon and Intel) | [\`torv3-vanity-$tag-macos-universal.zip\`](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/download/$tag/torv3-vanity-$tag-macos-universal.zip) |
+| **Linux** (x86-64) | [\`torv3-vanity-$tag-linux-x64.tar.gz\`](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/download/$tag/torv3-vanity-$tag-linux-x64.tar.gz) |
 
-**Windows:** download the zip, right-click it and choose **Extract All**, then double-click **kore-vanity-gui.exe**.
+**Windows:** download the zip, right-click it and choose **Extract All**, then double-click **torv3-vanity-gui.exe**.
 If Windows shows *"Windows protected your PC"*, click **More info → Run anyway** (the program is not code-signed).
 No installation, drivers or toolkits are needed; the graphics card is used automatically if it helps.
 

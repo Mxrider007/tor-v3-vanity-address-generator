@@ -7,10 +7,10 @@ Thanks for helping! Bug reports, ideas and pull requests are all welcome.
 Install [Rust](https://rustup.rs/) 1.95 or newer, then:
 
 ```bash
-cargo build --workspace            # CLI (kore-vanity) and GUI (kore-vanity-gui)
+cargo build --workspace            # CLI (torv3-vanity) and GUI (torv3-vanity-gui)
 cargo test --workspace             # unit and end-to-end tests
-cargo run -p kore-vanity-gui       # run the app
-cargo run -- kore --gpu off        # run the command line
+cargo run -p torv3-vanity-gui       # run the app
+cargo run -- shop --gpu off        # run the command line
 ```
 
 Before opening a pull request, please run:
@@ -38,8 +38,8 @@ cargo test --workspace
 
 - **GPU:** the kernel is compared bit-for-bit with the CPU walker. Without a GPU,
   install Mesa's software Vulkan driver (`sudo apt install mesa-vulkan-drivers`) and run
-  `KORE_VANITY_SOFTWARE_GPU=1 cargo test -p kore-vanity --lib -- --ignored`.
-- **Tor:** `scripts/tor-compat-test.sh target/release/kore-vanity` (needs `tor`) checks
+  `TORV3_VANITY_SOFTWARE_GPU=1 cargo test -p torv3-vanity --lib -- --ignored`.
+- **Tor:** `scripts/tor-compat-test.sh target/release/torv3-vanity` (needs `tor`) checks
   that Tor derives the same addresses from our secret keys.
 
 Any change to key generation must keep every candidate going through

@@ -1,10 +1,10 @@
-Kore Vanity @VERSION@ - Tor v3 .onion vanity address generator
-https://github.com/Mxrider420z/kore-vanity
+Tor V3 Vanity Address Generator @VERSION@ - Tor v3 .onion vanity address generator
+https://github.com/Mxrider007/tor-v3-vanity-address-generator
 
 QUICK START
-  ./kore-vanity-gui            graphical app
-  ./kore-vanity kore           command line: address starting with "kore"
-  ./kore-vanity --help         all options
+  ./torv3-vanity-gui            graphical app
+  ./torv3-vanity shop           command line: address starting with "shop"
+  ./torv3-vanity --help         all options
 
 Requirements: a 64-bit Linux desktop (X11 or Wayland) with glibc 2.35 or
 newer. The GPU is used through Vulkan when a dedicated graphics card is
@@ -12,9 +12,9 @@ present (install your distribution's Vulkan driver, e.g. mesa-vulkan-drivers
 or the NVIDIA driver); otherwise the CPU is used.
 
 To add the app to your applications menu:
-  install -Dm755 kore-vanity-gui ~/.local/bin/kore-vanity-gui
-  install -Dm644 kore-vanity.png ~/.local/share/icons/hicolor/256x256/apps/kore-vanity.png
-  install -Dm644 kore-vanity.desktop ~/.local/share/applications/kore-vanity.desktop
+  install -Dm755 torv3-vanity-gui ~/.local/bin/torv3-vanity-gui
+  install -Dm644 torv3-vanity.png ~/.local/share/icons/hicolor/256x256/apps/torv3-vanity.png
+  install -Dm644 torv3-vanity.desktop ~/.local/share/applications/torv3-vanity.desktop
 
 WHAT YOU GET
 Each address is saved as a folder named after it containing hostname,

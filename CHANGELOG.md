@@ -34,7 +34,7 @@ First public release: a complete rewrite focused on speed, safety and ease of us
   with *Copy* and *Show keys folder* buttons, remembered settings and an icon.
 - Command line: `--count`, `--estimate`, `--benchmark`, `--verify`, `--list-gpus`,
   `--quiet`, clearer messages and exit codes, and an explanation when
-  `kore-vanity.exe` is double-clicked in Windows Explorer.
+  `torv3-vanity.exe` is double-clicked in Windows Explorer.
 - Ready-to-run downloads for Windows (x64), macOS (universal) and Linux (x64),
   with quick-start instructions, checksums and third-party licenses.
 - Continuous integration on Windows, macOS and Linux, including GPU-kernel and
@@ -60,4 +60,4 @@ First public release: a complete rewrite focused on speed, safety and ease of us
 - Progress and estimates were misleading (e.g. an estimated 2M keys/s when the
   real speed was 0.17M keys/s).
 
-[1.0.0]: https://github.com/Mxrider420z/kore-vanity/releases/tag/v1.0.0
+[1.0.0]: https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/tag/v1.0.0

@@ -8,11 +8,11 @@
 
 Fast, free and open source: runs on your CPU and on any modern graphics card, with an easy app for Windows, macOS and Linux.
 
-[![CI](https://github.com/Mxrider420z/kore-vanity/actions/workflows/ci.yml/badge.svg)](https://github.com/Mxrider420z/kore-vanity/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/Mxrider420z/kore-vanity)](https://github.com/Mxrider420z/kore-vanity/releases/latest)
+[![CI](https://github.com/Mxrider007/tor-v3-vanity-address-generator/actions/workflows/ci.yml/badge.svg)](https://github.com/Mxrider007/tor-v3-vanity-address-generator/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Mxrider007/tor-v3-vanity-address-generator)](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**[⬇ Download for Windows, macOS and Linux](https://github.com/Mxrider420z/kore-vanity/releases/latest)**
+**[⬇ Download for Windows, macOS and Linux](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/latest)**
 
 </div>
 
@@ -37,9 +37,9 @@ for example **`kore`**`qmr7vp4…`**`.onion`**, and saves it ready to use with T
 
 ### Windows 10/11
 
-1. Download **`kore-vanity-…-windows-x64.zip`** from the [latest release](https://github.com/Mxrider420z/kore-vanity/releases/latest).
+1. Download **`torv3-vanity-…-windows-x64.zip`** from the [latest release](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/latest).
 2. Right-click the zip → **Extract All**.
-3. Double-click **`kore-vanity-gui.exe`**.
+3. Double-click **`torv3-vanity-gui.exe`**.
    If Windows shows *"Windows protected your PC"*, click **More info → Run anyway**. The app isn't code-signed, which is why Windows asks.
 4. Type the text your address should start with (e.g. `kore`) and click **Start search**.
 5. When it's done, click **Show keys folder**.
@@ -48,11 +48,11 @@ Nothing needs to be installed.
 
 ### macOS 11+ (Apple Silicon and Intel)
 
-Download **`…-macos-universal.zip`**, unzip it and open **Kore Vanity.app**. The app is not notarized, so the first time you open it, right-click it and choose **Open**. Alternatively, run `xattr -dr com.apple.quarantine "Kore Vanity.app"`.
+Download **`…-macos-universal.zip`**, unzip it and open **Tor V3 Vanity.app**. The app is not notarized, so the first time you open it, right-click it and choose **Open**. Alternatively, run `xattr -dr com.apple.quarantine "Tor V3 Vanity.app"`.
 
 ### Linux (x86-64)
 
-Download **`…-linux-x64.tar.gz`**, extract it and run `./kore-vanity-gui` (app) or `./kore-vanity kore` (command line). For GPU support, install your Vulkan driver (e.g. `mesa-vulkan-drivers` or the NVIDIA driver).
+Download **`…-linux-x64.tar.gz`**, extract it and run `./torv3-vanity-gui` (app) or `./torv3-vanity kore` (command line). For GPU support, install your Vulkan driver (e.g. `mesa-vulkan-drivers` or the NVIDIA driver).
 
 ## How long will it take?
 
@@ -76,19 +76,19 @@ A graphics card adds its own speed on top of these figures. Tips:
 ## Command line
 
 ```text
-kore-vanity [OPTIONS] <PATTERN>...
+torv3-vanity [OPTIONS] <PATTERN>...
 
-  kore-vanity kore                   address starting with "kore"
-  kore-vanity kore -o keys           ...saved in the folder "keys"
-  kore-vanity kore blog shop         several patterns at once
-  kore-vanity k?re                   ? matches any single character
-  kore-vanity kore -n 5              find 5 addresses to choose from
-  kore-vanity kore --anywhere        "kore" anywhere in the address
-  kore-vanity kore -c shop           starts with "kore" and contains "shop"
-  kore-vanity kore --estimate        how long will it take on this computer?
-  kore-vanity --benchmark            measure your speed
-  kore-vanity --verify keys/kore...  check a saved key folder
-  kore-vanity --list-gpus            show usable graphics cards
+  torv3-vanity kore                   address starting with "kore"
+  torv3-vanity kore -o keys           ...saved in the folder "keys"
+  torv3-vanity kore blog shop         several patterns at once
+  torv3-vanity k?re                   ? matches any single character
+  torv3-vanity kore -n 5              find 5 addresses to choose from
+  torv3-vanity kore --anywhere        "kore" anywhere in the address
+  torv3-vanity kore -c shop           starts with "kore" and contains "shop"
+  torv3-vanity kore --estimate        how long will it take on this computer?
+  torv3-vanity --benchmark            measure your speed
+  torv3-vanity --verify keys/kore...  check a saved key folder
+  torv3-vanity --list-gpus            show usable graphics cards
 ```
 
 | Option | Meaning |
@@ -164,7 +164,7 @@ Key generators are sometimes flagged by heuristics. Kore Vanity is open source, 
 <details>
 <summary><b>The graphics card isn't used</b></summary>
 
-Run `kore-vanity --list-gpus`. In *auto* mode only dedicated graphics cards are used; use `--gpu on` (or tick the box in the app) to also use integrated graphics. Update your graphics driver if no card is listed. GPU search supports patterns at the start of the address; "anywhere" searches run on the CPU.
+Run `torv3-vanity --list-gpus`. In *auto* mode only dedicated graphics cards are used; use `--gpu on` (or tick the box in the app) to also use integrated graphics. Update your graphics driver if no card is listed. GPU search supports patterns at the start of the address; "anywhere" searches run on the CPU.
 </details>
 
 <details>
@@ -178,10 +178,10 @@ Onion addresses never contain `0`, `1`, `8` or `9`. Use letters that look simila
 Install [Rust](https://rustup.rs/) (1.95 or newer), then:
 
 ```bash
-git clone https://github.com/Mxrider420z/kore-vanity.git
-cd kore-vanity
+git clone https://github.com/Mxrider007/tor-v3-vanity-address-generator.git
+cd torv3-vanity
 cargo build --release --workspace
-# target/release/kore-vanity-gui  and  target/release/kore-vanity
+# target/release/torv3-vanity-gui  and  target/release/torv3-vanity
 ```
 
 On Windows you can double-click `build-windows.bat` instead (it needs Rust with the default MSVC toolchain); the programs end up in `dist\`. See [CONTRIBUTING.md](CONTRIBUTING.md) for tests and development notes.

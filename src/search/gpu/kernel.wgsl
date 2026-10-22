@@ -1,4 +1,4 @@
-// kore-vanity GPU kernel.
+// torv3-vanity GPU kernel.
 //
 // Field elements of GF(2^255 - 19) are 20 limbs of 13 bits (260 bits), so
 // that a product of two limbs (< 2^26.1) summed twenty times still fits in a

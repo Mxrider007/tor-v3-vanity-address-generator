@@ -13,7 +13,7 @@ impl TempDir {
         let mut nonce = [0u8; 8];
         getrandom::fill(&mut nonce).unwrap();
         let dir = std::env::temp_dir().join(format!(
-            "kore-vanity-{name}-{}-{:016x}",
+            "torv3-vanity-{name}-{}-{:016x}",
             std::process::id(),
             u64::from_le_bytes(nonce)
         ));

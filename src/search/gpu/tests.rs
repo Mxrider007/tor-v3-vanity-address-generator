@@ -27,7 +27,7 @@ fn shader_validates() {
 /// The GPU filter words select exactly the keys the CPU filter selects.
 #[test]
 fn filter_words_agree_with_prefix_filter() {
-    let patterns = ["a", "q?", "?7", "zz", "kor"].map(|p| Pattern::parse(p).unwrap());
+    let patterns = ["a", "q?", "?7", "zz", "sho"].map(|p| Pattern::parse(p).unwrap());
     let mut hits = 0;
     for _ in 0..3000 {
         let mut seed = [0u8; 32];
@@ -160,9 +160,9 @@ fn kernel_matches_cpu_walker() {
 
 /// A complete search on the GPU alone; every key is verified by the CPU.
 #[test]
-#[ignore = "needs a GPU or lavapipe; run with `KORE_VANITY_SOFTWARE_GPU=1 cargo test -- --ignored`"]
+#[ignore = "needs a GPU or lavapipe; run with `TORV3_VANITY_SOFTWARE_GPU=1 cargo test -- --ignored`"]
 fn gpu_only_search_finds_keys() {
-    let dir = std::env::temp_dir().join(format!("kore-vanity-gpu-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("torv3-vanity-gpu-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let matcher = Matcher::new(
         vec![Pattern::parse("k2").unwrap(), Pattern::parse("z").unwrap()],

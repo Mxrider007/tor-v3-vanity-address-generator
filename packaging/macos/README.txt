@@ -1,18 +1,18 @@
-Kore Vanity @VERSION@ - Tor v3 .onion vanity address generator
-https://github.com/Mxrider420z/kore-vanity
+Tor V3 Vanity Address Generator @VERSION@ - Tor v3 .onion vanity address generator
+https://github.com/Mxrider007/tor-v3-vanity-address-generator
 
 QUICK START
-  Open "Kore Vanity.app" (you may drag it to Applications first).
+  Open "Tor V3 Vanity.app" (you may drag it to Applications first).
 
   The app is not notarized by Apple, so the first time macOS will refuse to
   open it. Either right-click (Control-click) the app, choose Open and
   confirm, or allow it in System Settings > Privacy & Security > "Open
   Anyway". Alternatively run in Terminal:
-      xattr -dr com.apple.quarantine "Kore Vanity.app" kore-vanity
+      xattr -dr com.apple.quarantine "Tor V3 Vanity.app" torv3-vanity
 
 COMMAND LINE
-  ./kore-vanity kore           address starting with "kore"
-  ./kore-vanity --help         all options
+  ./torv3-vanity shop           address starting with "shop"
+  ./torv3-vanity --help         all options
 
 Runs natively on Apple Silicon and Intel Macs (macOS 11 or newer) and uses
 the GPU through Metal.
