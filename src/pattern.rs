@@ -34,9 +34,11 @@ pub enum PatternError {
     },
     #[error("'{0}' is only wildcards, so every address would match it")]
     OnlyWildcards(String),
-    #[error("'{pattern}' can never match at the start of an address: {reason}")]
+    #[error("'{pattern}' can never match {place}: {reason}")]
     Impossible {
         pattern: String,
+        /// "at the start of an address" or "anywhere in an address".
+        place: &'static str,
         reason: &'static str,
     },
     #[error("no patterns were given")]
@@ -215,6 +217,8 @@ pub struct Matcher {
     /// Anywhere mode: for each pattern, the start positions it can occupy
     /// given the fixed address tail.
     feasible: Vec<Vec<usize>>,
+    /// Per-pattern match probability (without "contains").
+    probabilities: Vec<f64>,
 }
 
 impl Matcher {
@@ -227,11 +231,19 @@ impl Matcher {
         if patterns.is_empty() {
             return Err(PatternError::NoPatterns);
         }
-        for p in patterns.iter().chain(&contains) {
-            let anywhere = anywhere || contains.contains(p);
+        let checks = patterns
+            .iter()
+            .map(|p| (p, anywhere))
+            .chain(contains.iter().map(|p| (p, true)));
+        for (p, anywhere) in checks {
             if p.probability(anywhere) == 0.0 {
                 return Err(PatternError::Impossible {
                     pattern: p.to_string(),
+                    place: if anywhere {
+                        "anywhere in an address"
+                    } else {
+                        "at the start of an address"
+                    },
                     reason: "the last two characters of every v3 address are one of a/i/q/y followed by 'd'",
                 });
             }
@@ -244,15 +256,17 @@ impl Matcher {
                     .collect()
             })
             .collect();
+        let probabilities = patterns.iter().map(|p| p.probability(anywhere)).collect();
         Ok(Matcher {
             patterns,
             anywhere,
             contains,
             feasible,
+            probabilities,
         })
     }
 
-    /// The patterns being searched for, in priority order.
+    /// The patterns being searched for.
     pub fn patterns(&self) -> &[Pattern] {
         &self.patterns
     }
@@ -277,15 +291,24 @@ impl Matcher {
     }
 
     /// Check a full 56-character address. Only patterns for which `wanted`
-    /// returns true are considered; the first one that matches wins.
+    /// returns true are considered. If several match, the rarest one wins (so
+    /// that a lucky `shopping` is not used up as a `shop`), then the first
+    /// one listed.
     pub fn check(
         &self,
         address: &[u8; ADDRESS_LEN],
         wanted: impl Fn(usize) -> bool,
     ) -> MatchResult {
-        let Some(i) =
-            (0..self.patterns.len()).find(|&i| wanted(i) && self.pattern_matches(i, address))
-        else {
+        let mut best: Option<usize> = None;
+        for i in 0..self.patterns.len() {
+            if wanted(i)
+                && self.pattern_matches(i, address)
+                && best.is_none_or(|b| self.probabilities[i] < self.probabilities[b])
+            {
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else {
             return MatchResult::NoMatch;
         };
         if self.contains.iter().all(|c| c.matches_anywhere(address)) {
@@ -305,9 +328,14 @@ impl Matcher {
     /// For anywhere mode: could any wanted pattern match an address whose
     /// first [`PUBKEY_CHARS`] characters are `head`? `false` is definitive;
     /// `true` means the full address must be checked.
+    ///
+    /// With `sign_known == false`, `head` may be computed from y alone (the
+    /// public key with the sign bit of x clear); the one character that
+    /// depends on that bit is then compared without it.
     pub(crate) fn may_match_anywhere(
         &self,
         head: &[u8; PUBKEY_CHARS],
+        sign_known: bool,
         wanted: impl Fn(usize) -> bool,
     ) -> bool {
         self.patterns.iter().enumerate().any(|(i, p)| {
@@ -321,9 +349,29 @@ impl Matcher {
                     .iter()
                     .enumerate()
                     .take_while(|(k, _)| pos + k < PUBKEY_CHARS)
-                    .all(|(k, &c)| c == WILDCARD as u8 || c == head[pos + k])
+                    .all(|(k, &c)| {
+                        c == WILDCARD as u8
+                            || c == head[pos + k]
+                            || (!sign_known
+                                && pos + k == SIGN_CHAR
+                                && digit(c) & !SIGN_DIGIT_BIT == digit(head[pos + k]))
+                    })
             })
         })
+    }
+}
+
+/// The address character that holds the sign bit of x (stream bit 248), and
+/// that bit's value within the character's 5-bit digit.
+const SIGN_CHAR: usize = 49;
+const SIGN_DIGIT_BIT: u8 = 2;
+
+/// The 5-bit value of a base32 character.
+fn digit(c: u8) -> u8 {
+    match c {
+        b'a'..=b'z' => c - b'a',
+        b'2'..=b'7' => c - b'2' + 26,
+        _ => 0,
     }
 }
 
@@ -450,6 +498,15 @@ mod tests {
         assert_eq!(m.check(&addr, |_| true), MatchResult::Match(0));
         assert_eq!(m.check(&addr, |i| i != 0), MatchResult::Match(1));
         assert_eq!(m.check(&addr, |_| false), MatchResult::NoMatch);
+
+        // The rarest matching pattern wins, whatever the order.
+        let m = Matcher::new(vec![p("ab"), p("abc"), p("a")], false, vec![]).unwrap();
+        let mut addr = [b'z'; ADDRESS_LEN];
+        addr[..3].copy_from_slice(b"abc");
+        assert_eq!(m.check(&addr, |_| true), MatchResult::Match(1));
+        assert_eq!(m.check(&addr, |i| i != 1), MatchResult::Match(0));
+        addr[2] = b'x';
+        assert_eq!(m.check(&addr, |_| true), MatchResult::Match(0));
     }
 
     #[test]
@@ -463,6 +520,16 @@ mod tests {
         ));
         // Anywhere mode can still place it elsewhere.
         assert!(Matcher::new(vec![p("bd")], true, vec![]).is_ok());
+        // The same text as a "contains" word does not make it possible.
+        assert!(matches!(
+            Matcher::new(vec![p(&tail_bad)], false, vec![p(&tail_bad)]),
+            Err(PatternError::Impossible { .. })
+        ));
+        // A 56-character pattern is impossible anywhere, and the message
+        // says so.
+        let full_bad = format!("{}bd", "a".repeat(54));
+        let err = Matcher::new(vec![p("ab")], false, vec![p(&full_bad)]).unwrap_err();
+        assert!(err.to_string().contains("anywhere in an address"), "{err}");
         assert_eq!(
             Matcher::new(vec![], false, vec![]).unwrap_err(),
             PatternError::NoPatterns
@@ -520,14 +587,27 @@ mod tests {
 
     #[test]
     fn may_match_anywhere_never_misses() {
-        let m = Matcher::new(vec![p("ab"), p("q?d")], true, vec![]).unwrap();
-        for _ in 0..2000 {
+        use crate::onion::pubkey_chars;
+        let mut patterns = vec![p("ab"), p("q?d")];
+        let mut hits = 0;
+        for round in 0..3000 {
             let pk = random_pubkey();
             let chars = address_chars(&pk);
+            if round % 3 == 0 {
+                // Patterns that cover the character holding the sign bit.
+                patterns.truncate(2);
+                patterns.push(p(std::str::from_utf8(&chars[47..52]).unwrap()));
+            }
+            let m = Matcher::new(patterns.clone(), true, vec![]).unwrap();
             let head: [u8; PUBKEY_CHARS] = chars[..PUBKEY_CHARS].try_into().unwrap();
+            let mut y = pk;
+            y[31] &= 0x7f;
             if m.check(&chars, |_| true) != MatchResult::NoMatch {
-                assert!(m.may_match_anywhere(&head, |_| true));
+                hits += 1;
+                assert!(m.may_match_anywhere(&head, true, |_| true));
+                assert!(m.may_match_anywhere(&pubkey_chars(&y), false, |_| true));
             }
         }
+        assert!(hits > 1000);
     }
 }

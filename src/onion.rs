@@ -244,34 +244,122 @@ pub fn is_clamped(scalar: &[u8; 32]) -> bool {
 /// `<output_dir>/<address-without-.onion>/` and return that path.
 ///
 /// The directory contains `hostname`, `hs_ed25519_public_key`,
-/// `hs_ed25519_secret_key` and an empty `authorized_clients/`. On Unix the
-/// directory is created `0700` and the files `0600` from the start, so the
-/// secret key is never readable by other users, not even briefly. Existing
-/// files are never overwritten, and everything is flushed to disk before
-/// returning.
+/// `hs_ed25519_secret_key` and an empty `authorized_clients/`. It is first
+/// written under a temporary name, flushed to disk, read back and verified
+/// with [`verify_hidden_service_dir`], and only then renamed to its final
+/// name, so a key directory with the address as its name is always complete.
+/// If anything fails, the temporary directory is removed again.
+///
+/// On Unix the key directory is created `0700` and the files `0600` from the
+/// start, so the secret key is never readable by other users, not even
+/// briefly; missing parent directories are created `0700` as well. On
+/// Windows everything inherits the permissions of `output_dir`. Existing
+/// key directories are never overwritten.
 pub fn write_hidden_service_dir(output_dir: &Path, secret: &SecretKey) -> io::Result<PathBuf> {
-    let pubkey = secret.public_key();
-    let onion = onion_address(&pubkey);
+    let onion = secret.onion_address();
     let hs_dir = output_dir.join(onion.trim_end_matches(".onion"));
 
-    fs::create_dir_all(output_dir)?;
-    create_private_dir(&hs_dir)?;
-    write_new_file(&hs_dir.join("hostname"), format!("{onion}\n").as_bytes())?;
+    create_output_dir(output_dir)?;
+    let temp = create_temp_dir(output_dir)?;
+    let result = write_key_files(&temp, secret)
+        .and_then(|()| match verify_hidden_service_dir(&temp) {
+            Ok(address) if address == onion => Ok(()),
+            Ok(address) => Err(io::Error::other(format!(
+                "the saved key is for {address} instead of {onion}"
+            ))),
+            Err(e) => Err(io::Error::other(format!(
+                "the saved key failed verification: {e}"
+            ))),
+        })
+        .and_then(|()| {
+            sync_dir(&temp);
+            // A plain rename would replace an existing empty directory.
+            if fs::symlink_metadata(&hs_dir).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{} already exists", hs_dir.display()),
+                ));
+            }
+            fs::rename(&temp, &hs_dir)
+        });
+    match result {
+        Ok(()) => {
+            sync_dir(output_dir);
+            Ok(hs_dir)
+        }
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp);
+            Err(e)
+        }
+    }
+}
+
+/// Create `output_dir` if needed and check that key directories can be
+/// written there, by creating and removing a small temporary directory.
+pub fn check_output_dir(output_dir: &Path) -> io::Result<()> {
+    create_output_dir(output_dir)?;
+    let temp = create_temp_dir(output_dir)?;
+    let result = write_new_file(&temp.join("write-test"), b"torv3-vanity\n");
+    let removed = fs::remove_dir_all(&temp);
+    result.and(removed)
+}
+
+/// Prefix of the temporary directories keys are written to before they get
+/// their final name. One left behind by a crash can be deleted.
+pub const TEMP_DIR_PREFIX: &str = ".torv3-vanity-tmp-";
+
+fn write_key_files(dir: &Path, secret: &SecretKey) -> io::Result<()> {
+    let pubkey = secret.public_key();
+    write_new_file(
+        &dir.join("hostname"),
+        format!("{}\n", onion_address(&pubkey)).as_bytes(),
+    )?;
 
     let mut public = Vec::with_capacity(64);
     public.extend_from_slice(PUBLIC_KEY_HEADER);
     public.extend_from_slice(&pubkey);
-    write_new_file(&hs_dir.join("hs_ed25519_public_key"), &public)?;
+    write_new_file(&dir.join("hs_ed25519_public_key"), &public)?;
 
     let mut private = [0u8; 96];
     private[..32].copy_from_slice(SECRET_KEY_HEADER);
     private[32..].copy_from_slice(secret.expanded());
-    let result = write_new_file(&hs_dir.join("hs_ed25519_secret_key"), &private);
+    let result = write_new_file(&dir.join("hs_ed25519_secret_key"), &private);
     private.zeroize();
     result?;
 
-    create_private_dir(&hs_dir.join("authorized_clients"))?;
-    Ok(hs_dir)
+    create_private_dir(&dir.join("authorized_clients"))
+}
+
+/// `create_dir_all`, but on Unix new directories are private (`0700`): their
+/// contents are named after the onion addresses.
+fn create_output_dir(path: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+fn create_temp_dir(parent: &Path) -> io::Result<PathBuf> {
+    for _ in 0..8 {
+        let mut nonce = [0u8; 8];
+        getrandom::fill(&mut nonce).map_err(|e| io::Error::other(e.to_string()))?;
+        let path = parent.join(format!(
+            "{TEMP_DIR_PREFIX}{:016x}",
+            u64::from_le_bytes(nonce)
+        ));
+        match create_private_dir(&path) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            result => return result.map(|()| path),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create a temporary directory",
+    ))
 }
 
 fn create_private_dir(path: &Path) -> io::Result<()> {
@@ -297,6 +385,19 @@ fn write_new_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut file = options.open(path)?;
     file.write_all(contents)?;
     file.sync_all()
+}
+
+/// Flush a directory's entries to disk (Unix only; best effort, since some
+/// file systems do not support it).
+fn sync_dir(path: &Path) {
+    #[cfg(unix)]
+    {
+        let _ = fs::File::open(path).and_then(|dir| dir.sync_all());
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 /// Problems found when checking a hidden-service directory.
@@ -328,12 +429,16 @@ pub fn verify_hidden_service_dir(dir: &Path) -> Result<String, KeyFileError> {
         fs::read(&path).map_err(|source| KeyFileError::Io { path, source })
     };
 
-    let secret_bytes = read("hs_ed25519_secret_key")?;
-    if secret_bytes.len() != 96 || &secret_bytes[..32] != SECRET_KEY_HEADER {
+    let mut secret_bytes = read("hs_ed25519_secret_key")?;
+    let valid = secret_bytes.len() == 96 && &secret_bytes[..32] == SECRET_KEY_HEADER;
+    let mut expanded = [0u8; 64];
+    if valid {
+        expanded.copy_from_slice(&secret_bytes[32..]);
+    }
+    secret_bytes.zeroize();
+    if !valid {
         return Err(KeyFileError::Format(dir.join("hs_ed25519_secret_key")));
     }
-    let mut expanded = [0u8; 64];
-    expanded.copy_from_slice(&secret_bytes[32..]);
     let secret = SecretKey::from_expanded(expanded);
     expanded.zeroize();
 
@@ -479,8 +584,15 @@ mod tests {
             assert_eq!(mode(&hs_dir.join("hs_ed25519_secret_key")), 0o600);
         }
 
-        // Never overwrite an existing key directory.
-        assert!(write_hidden_service_dir(&dir, &secret).is_err());
+        // Never overwrite an existing key directory, and clean up after a
+        // failed save.
+        let err = write_hidden_service_dir(&dir, &secret).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        let names: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, [secret.onion_address().trim_end_matches(".onion")]);
 
         // Tampering is detected.
         fs::write(hs_dir.join("hostname"), "nope.onion\n").unwrap();
@@ -489,6 +601,30 @@ mod tests {
             Err(KeyFileError::HostnameMismatch { .. })
         ));
         remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn output_dir_check() {
+        let base = std::env::temp_dir().join(format!("torv3-vanity-check-{}", std::process::id()));
+        remove_test_dir(&base);
+        let dir = base.join("a").join("b");
+        check_output_dir(&dir).unwrap();
+        assert!(
+            fs::read_dir(&dir).unwrap().next().is_none(),
+            "probe left behind"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o077;
+            assert_eq!(mode, 0, "new output folders must be private");
+        }
+        // A file where the folder should be.
+        let file = base.join("file");
+        fs::write(&file, b"x").unwrap();
+        assert!(check_output_dir(&file).is_err());
+        assert!(check_output_dir(&file.join("sub")).is_err());
+        remove_test_dir(&base);
     }
 
     fn random_key() -> SecretKey {

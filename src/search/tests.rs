@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::onion::{SECRET_KEY_HEADER, decode_onion_address, is_clamped, remove_test_dir};
+use crate::onion::{
+    SECRET_KEY_HEADER, decode_onion_address, is_clamped, remove_test_dir, verify_hidden_service_dir,
+};
 use crate::pattern::Pattern;
 
 struct TempDir(PathBuf);
@@ -160,23 +162,129 @@ fn stops_on_request_and_reports_stats() {
 }
 
 #[test]
-fn unwritable_output_is_a_fatal_error() {
+fn unwritable_output_is_rejected_before_searching() {
     let dir = TempDir::new("unwritable");
     // A regular file where the output directory should be.
     std::fs::write(&dir.0, b"not a directory").unwrap();
-    let search = Search::start(config(&["a"], false, &[], 1, &dir)).unwrap();
-    let mut saw_error = false;
-    while let Some(e) = search.next_event(Duration::from_secs(30)) {
-        match e {
-            Event::Error(_) => saw_error = true,
-            Event::Found(f) => panic!("unexpected {f:?}"),
-            Event::Finished => break,
-            _ => {}
+    assert!(matches!(
+        Search::start(config(&["a"], false, &[], 1, &dir)),
+        Err(SearchError::OutputDir { .. })
+    ));
+    let mut nested = config(&["a"], false, &[], 1, &dir);
+    nested.output_dir = dir.0.join("keys");
+    assert!(matches!(
+        Search::start(nested),
+        Err(SearchError::OutputDir { .. })
+    ));
+    let _ = std::fs::remove_file(&dir.0);
+}
+
+/// Wait for the next event other than `Info`.
+fn next_important(search: &Search, timeout: Duration) -> Option<Event> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match search.next_event(Duration::from_millis(50)) {
+            Some(Event::Info(_)) | None => {}
+            other => return other,
         }
     }
-    assert!(saw_error);
+    None
+}
+
+#[test]
+fn failed_save_keeps_the_key_and_retries() {
+    let dir = TempDir::new("retry");
+    let search = Search::start(config(&["abcd"], false, &[], 1, &dir)).unwrap();
+    // Break the output folder right after the start-up check.
+    std::fs::remove_dir_all(&dir.0).unwrap();
+    std::fs::write(&dir.0, b"not a directory").unwrap();
+
+    let warning = next_important(&search, Duration::from_secs(120));
+    assert!(
+        matches!(&warning, Some(Event::Warning(m)) if m.contains("Retrying")),
+        "{warning:?}"
+    );
+    // Nothing else happens while the problem lasts: no related keys, no
+    // second warning.
+    assert_eq!(next_important(&search, Duration::from_secs(1)), None);
+
+    // Fix it: the same key gets saved.
+    std::fs::remove_file(&dir.0).unwrap();
+    std::fs::create_dir(&dir.0).unwrap();
+    let found = match next_important(&search, Duration::from_secs(30)) {
+        Some(Event::Found(found)) => found,
+        other => panic!("expected the key to be saved, got {other:?}"),
+    };
+    assert_eq!(
+        verify_hidden_service_dir(&found.path).unwrap(),
+        found.address
+    );
+    assert_eq!(
+        next_important(&search, Duration::from_secs(30)),
+        Some(Event::Finished)
+    );
+    assert!(search.is_complete());
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
+}
+
+#[test]
+fn stopping_while_a_save_fails_is_an_error() {
+    let dir = TempDir::new("lost");
+    let search = Search::start(config(&["abcd"], false, &[], 1, &dir)).unwrap();
+    std::fs::remove_dir_all(&dir.0).unwrap();
+    std::fs::write(&dir.0, b"not a directory").unwrap();
+    assert!(matches!(
+        next_important(&search, Duration::from_secs(120)),
+        Some(Event::Warning(_))
+    ));
+    search.stop();
+    assert!(matches!(
+        next_important(&search, Duration::from_secs(10)),
+        Some(Event::Error(m)) if m.contains("lost")
+    ));
+    assert_eq!(
+        next_important(&search, Duration::from_secs(10)),
+        Some(Event::Finished)
+    );
     assert!(!search.is_complete());
+    assert_eq!(search.stats().found, 0);
     let _ = std::fs::remove_file(&dir.0);
+}
+
+#[test]
+fn events_end_after_finished() {
+    let dir = TempDir::new("finished");
+    let search = Search::start(config(&["a"], false, &[], 1, &dir)).unwrap();
+    assert!(matches!(
+        next_important(&search, Duration::from_secs(60)),
+        Some(Event::Found(_))
+    ));
+    assert_eq!(
+        next_important(&search, Duration::from_secs(60)),
+        Some(Event::Finished)
+    );
+    // The channel is closed, so this returns at once instead of waiting.
+    let started = Instant::now();
+    assert_eq!(search.next_event(Duration::from_secs(30)), None);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn rejects_invalid_configs() {
+    let dir = TempDir::new("invalid");
+    let mut c = config(&["a"], false, &[], 1, &dir);
+    c.count = Some(0);
+    assert!(matches!(Search::start(c), Err(SearchError::InvalidCount)));
+    #[cfg(feature = "gpu")]
+    for (patterns, anywhere) in [
+        (&["ab"][..], true),
+        (&[&*format!("{}a", "?".repeat(51))][..], false),
+    ] {
+        let mut c = config(patterns, anywhere, &[], 1, &dir);
+        c.cpu_threads = 0;
+        c.gpu = GpuMode::On;
+        assert!(matches!(Search::start(c), Err(SearchError::NeedsCpu)));
+    }
 }
 
 #[test]

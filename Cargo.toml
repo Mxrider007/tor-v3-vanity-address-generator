@@ -11,7 +11,8 @@ readme = "README.md"
 keywords = ["tor", "onion", "vanity", "ed25519", "gpu"]
 categories = ["command-line-utilities", "cryptography"]
 default-run = "torv3-vanity"
-include = ["src/**", "gui/assets/icon.ico", "build.rs", "Cargo.toml", "README.md", "LICENSE", "CHANGELOG.md"]
+# Distributed as binaries from GitHub releases, not through crates.io.
+publish = false
 
 [workspace]
 members = ["gui"]

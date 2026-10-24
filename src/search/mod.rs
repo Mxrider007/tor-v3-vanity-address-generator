@@ -15,8 +15,11 @@
 //! Whatever the fast path reports is treated as a *candidate*: the key is
 //! re-derived from scratch with curve25519-dalek, re-matched, and must pass a
 //! signing self-test before it is written; the files are then read back and
-//! verified. After a key is saved, the worker starts over from a new random
-//! key, so saved keys are never related to each other.
+//! verified before they get their final name. After a key is saved, the
+//! worker starts over from a new random key, so saved keys are never related
+//! to each other. If a key cannot be saved (for example because the disk is
+//! full), the worker keeps it in memory and retries until it succeeds or the
+//! search is stopped; it never moves on to related keys.
 
 mod cpu;
 #[cfg(feature = "gpu")]
@@ -25,7 +28,7 @@ mod gpu;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -33,17 +36,22 @@ use thiserror::Error;
 
 use crate::curve::walk::WalkTable;
 use crate::onion::{
-    SecretKey, address_chars, is_clamped, verify_hidden_service_dir, write_hidden_service_dir,
+    SecretKey, address_chars, check_output_dir, is_clamped, onion_address, write_hidden_service_dir,
 };
 use crate::pattern::{MatchResult, Matcher, PrefixFilter};
 
 /// Whether to use a GPU.
+///
+/// The GPU only searches for patterns at the start of the address. Whenever
+/// it cannot be used and there are CPU threads, the search continues on the
+/// CPU alone (with an [`Event::Info`] in `Auto` mode and an
+/// [`Event::Warning`] in `On` mode).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GpuMode {
-    /// Use a dedicated (discrete) GPU if one is found, otherwise just the CPU.
+    /// Use a dedicated GPU (or Apple Silicon graphics) if one is found.
     #[default]
     Auto,
-    /// Use the best available GPU, including integrated ones; fail if none.
+    /// Use the best available GPU, including integrated graphics.
     On,
     /// CPU only.
     Off,
@@ -54,9 +62,11 @@ pub enum GpuMode {
 pub struct SearchConfig {
     /// The patterns and matching rules.
     pub matcher: Matcher,
-    /// Addresses to find per pattern; `None` keeps going until stopped.
+    /// Addresses to find per pattern (at least 1); `None` keeps going until
+    /// stopped.
     pub count: Option<u64>,
-    /// Where hidden-service directories are written (created if missing).
+    /// Where hidden-service directories are written. It is created if
+    /// missing and checked for write access before the search starts.
     pub output_dir: PathBuf,
     /// Number of CPU worker threads (may be 0 when a GPU is used).
     pub cpu_threads: usize,
@@ -97,6 +107,19 @@ pub enum SearchError {
     NoWorkers,
     #[error("this build of torv3-vanity has no GPU support")]
     NoGpuSupport,
+    #[error(
+        "the GPU only searches for text at the start of the address (within the first 51 \
+         characters); use at least one CPU thread for this search"
+    )]
+    NeedsCpu,
+    #[error("the number of addresses to find must be at least 1")]
+    InvalidCount,
+    #[error("cannot save keys in {}: {source}", path.display())]
+    OutputDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("could not start a worker thread: {0}")]
     Thread(#[from] std::io::Error),
 }
@@ -126,6 +149,8 @@ pub struct GpuInfo {
     pub discrete: bool,
     /// Whether it is a software (CPU-emulated) device.
     pub software: bool,
+    /// Whether [`GpuMode::Auto`] uses it: dedicated cards and Apple Silicon.
+    pub preferred: bool,
 }
 
 /// Set this environment variable (to anything but `0`) to allow software
@@ -135,6 +160,11 @@ pub const SOFTWARE_GPU_ENV: &str = "TORV3_VANITY_SOFTWARE_GPU";
 /// Whether [`SOFTWARE_GPU_ENV`] is set.
 pub fn software_gpu_allowed() -> bool {
     std::env::var_os(SOFTWARE_GPU_ENV).is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Whether this build can use a GPU (the `gpu` feature).
+pub fn gpu_support() -> bool {
+    cfg!(feature = "gpu")
 }
 
 /// List GPUs usable for the search (empty without the `gpu` feature).
@@ -181,55 +211,66 @@ impl Search {
             GpuMode::On => return Err(SearchError::NoGpuSupport),
             GpuMode::Auto => false,
         };
-        if config.cpu_threads == 0 && !use_gpu {
-            return Err(SearchError::NoWorkers);
+        if config.cpu_threads == 0 {
+            if !use_gpu {
+                return Err(SearchError::NoWorkers);
+            }
+            let matcher = &config.matcher;
+            if matcher.anywhere()
+                || matcher
+                    .patterns()
+                    .iter()
+                    .any(|p| p.prefix_filter().words == 0)
+            {
+                return Err(SearchError::NeedsCpu);
+            }
         }
+        if config.count == Some(0) {
+            return Err(SearchError::InvalidCount);
+        }
+        // Find out now, not hours later when the first key is found.
+        check_output_dir(&config.output_dir).map_err(|source| SearchError::OutputDir {
+            path: config.output_dir.clone(),
+            source,
+        })?;
 
         let (tx, events) = mpsc::channel();
         let shared = Arc::new(Shared::new(&config, tx));
-        let mut workers = Vec::new();
-        for i in 0..config.cpu_threads {
-            let worker_shared = Arc::clone(&shared);
-            let handle = std::thread::Builder::new()
-                .name(format!("vanity-cpu-{i}"))
-                .spawn(move || cpu::run(&worker_shared));
-            match handle {
-                Ok(h) => workers.push(h),
-                Err(e) => {
-                    shared.request_stop();
-                    return Err(e.into());
-                }
+        let spawn = || -> std::io::Result<JoinHandle<()>> {
+            let mut workers = Vec::new();
+            for i in 0..config.cpu_threads {
+                workers.push(spawn_worker(&shared, format!("vanity-cpu-{i}"), cpu::run)?);
+            }
+            #[cfg(feature = "gpu")]
+            if use_gpu {
+                let (mode, cpu_threads) = (config.gpu, config.cpu_threads);
+                workers.push(spawn_worker(&shared, "vanity-gpu".into(), move |shared| {
+                    gpu::run(shared, mode, cpu_threads)
+                })?);
+            }
+            let shared = Arc::clone(&shared);
+            std::thread::Builder::new()
+                .name("vanity-supervisor".into())
+                .spawn(move || {
+                    for worker in workers {
+                        // A panic was already reported by the worker's guard.
+                        let _ = worker.join();
+                    }
+                    shared.finish();
+                })
+        };
+        match spawn() {
+            Ok(supervisor) => Ok(Search {
+                shared,
+                events,
+                supervisor: Some(supervisor),
+            }),
+            Err(e) => {
+                // Stop the workers that did start.
+                shared.request_stop();
+                Err(e.into())
             }
         }
-        #[cfg(feature = "gpu")]
-        if use_gpu {
-            let shared = Arc::clone(&shared);
-            let mode = config.gpu;
-            let cpu_threads = config.cpu_threads;
-            workers.push(
-                std::thread::Builder::new()
-                    .name("vanity-gpu".into())
-                    .spawn(move || gpu::run(&shared, mode, cpu_threads))?,
-            );
-        }
-
-        let supervisor_shared = Arc::clone(&shared);
-        let supervisor = std::thread::Builder::new()
-            .name("vanity-supervisor".into())
-            .spawn(move || {
-                for worker in workers {
-                    if worker.join().is_err() {
-                        supervisor_shared.fail("a search thread crashed unexpectedly".into());
-                    }
-                }
-                supervisor_shared.send(Event::Finished);
-            })?;
-
-        Ok(Search {
-            shared,
-            events,
-            supervisor: Some(supervisor),
-        })
     }
 
     /// Ask all workers to stop. Returns immediately; a [`Event::Finished`]
@@ -253,8 +294,9 @@ impl Search {
         self.events.try_recv().ok()
     }
 
-    /// Wait up to `timeout` for the next event. Returns `None` on timeout or
-    /// once the search has finished and every event was delivered.
+    /// Wait up to `timeout` for the next event. Returns `None` on timeout, or
+    /// immediately once the search has finished and every event was
+    /// delivered.
     pub fn next_event(&self, timeout: Duration) -> Option<Event> {
         self.events.recv_timeout(timeout).ok()
     }
@@ -264,7 +306,8 @@ impl Search {
         self.supervisor.as_ref().is_none_or(|h| h.is_finished())
     }
 
-    /// Whether every requested address was found (as opposed to stopped).
+    /// Whether every requested address was found and saved (as opposed to
+    /// stopped).
     pub fn is_complete(&self) -> bool {
         self.shared.remaining.load(Ordering::Acquire) == 0
     }
@@ -276,6 +319,43 @@ impl Drop for Search {
     }
 }
 
+/// Start a worker thread whose panic is reported right away, instead of only
+/// when the supervisor gets around to joining it.
+fn spawn_worker(
+    shared: &Arc<Shared>,
+    name: String,
+    body: impl FnOnce(&Shared) + Send + 'static,
+) -> std::io::Result<JoinHandle<()>> {
+    struct PanicGuard<'a>(&'a Shared);
+    impl Drop for PanicGuard<'_> {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                self.0.fail("a search thread crashed unexpectedly".into());
+            }
+        }
+    }
+
+    let shared = Arc::clone(shared);
+    std::thread::Builder::new().name(name).spawn(move || {
+        let _guard = PanicGuard(&shared);
+        body(&shared);
+    })
+}
+
+/// How often saving a found key is retried after it failed.
+const SAVE_RETRY: Duration = Duration::from_secs(10);
+
+/// What became of a candidate passed to [`Shared::submit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Submitted {
+    /// Verified and saved: continue from a fresh random key, because further
+    /// keys of the same walk would be related to this one.
+    Saved,
+    /// Not (or no longer) a wanted match; keep going.
+    Rejected,
+    /// The search is stopping: return without looking at more candidates.
+    Stop,
+}
 /// State shared by all workers of one search.
 pub(crate) struct Shared {
     pub(crate) matcher: Matcher,
@@ -285,7 +365,10 @@ pub(crate) struct Shared {
     pub(crate) filters: Vec<PrefixFilter>,
     /// Addresses wanted per pattern (`u64::MAX` = unlimited).
     target: u64,
-    found: Vec<AtomicU64>,
+    /// Addresses claimed per pattern: saved, or being saved.
+    claimed: Vec<AtomicU64>,
+    /// Addresses saved per pattern.
+    saved: Vec<AtomicU64>,
     completed: Vec<AtomicBool>,
     remaining: AtomicUsize,
     /// Incremented whenever the set of wanted patterns shrinks.
@@ -296,7 +379,8 @@ pub(crate) struct Shared {
     near_misses: AtomicU64,
     output_dir: PathBuf,
     started: Instant,
-    events: Mutex<Sender<Event>>,
+    /// Dropped after [`Event::Finished`], which disconnects the channel.
+    events: Mutex<Option<Sender<Event>>>,
 }
 
 impl Shared {
@@ -312,7 +396,8 @@ impl Shared {
             matcher: config.matcher.clone(),
             table: WalkTable::new(cpu::GROUP),
             target: config.count.unwrap_or(u64::MAX),
-            found: (0..n).map(|_| AtomicU64::new(0)).collect(),
+            claimed: (0..n).map(|_| AtomicU64::new(0)).collect(),
+            saved: (0..n).map(|_| AtomicU64::new(0)).collect(),
             completed: (0..n).map(|_| AtomicBool::new(false)).collect(),
             remaining: AtomicUsize::new(n),
             generation: AtomicU64::new(0),
@@ -322,7 +407,7 @@ impl Shared {
             near_misses: AtomicU64::new(0),
             output_dir: config.output_dir.clone(),
             started: Instant::now(),
-            events: Mutex::new(events),
+            events: Mutex::new(Some(events)),
         }
     }
 
@@ -335,8 +420,29 @@ impl Shared {
     }
 
     pub(crate) fn send(&self, event: Event) {
-        if let Ok(tx) = self.events.lock() {
+        let events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(tx) = events.as_ref() {
             let _ = tx.send(event);
+        }
+    }
+
+    /// Send [`Event::Finished`] and close the channel.
+    fn finish(&self) {
+        let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(tx) = events.take() {
+            let _ = tx.send(Event::Finished);
+        }
+    }
+
+    /// Sleep for `duration`, waking up early if the search is stopped.
+    fn sleep_unless_stopped(&self, duration: Duration) {
+        let until = Instant::now() + duration;
+        while !self.should_stop() {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            std::thread::sleep(left.min(Duration::from_millis(100)));
         }
     }
 
@@ -348,7 +454,7 @@ impl Shared {
 
     /// Whether more addresses are wanted for pattern `i`.
     pub(crate) fn wants(&self, i: usize) -> bool {
-        self.found[i].load(Ordering::Acquire) < self.target
+        self.claimed[i].load(Ordering::Acquire) < self.target
     }
 
     pub(crate) fn add_keys(&self, n: u64) {
@@ -369,7 +475,7 @@ impl Shared {
         Stats {
             keys_checked: self.keys.load(Ordering::Relaxed),
             gpu_keys_checked: self.gpu_keys.load(Ordering::Relaxed),
-            found: self.found.iter().map(|f| f.load(Ordering::Relaxed)).sum(),
+            found: self.saved.iter().map(|f| f.load(Ordering::Relaxed)).sum(),
             near_misses: self.near_misses.load(Ordering::Relaxed),
             elapsed: self.started.elapsed(),
         }
@@ -377,7 +483,7 @@ impl Shared {
 
     /// Reserve one of the remaining slots for pattern `i`.
     fn claim(&self, i: usize) -> bool {
-        self.found[i]
+        self.claimed[i]
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < self.target).then_some(n + 1)
             })
@@ -385,11 +491,11 @@ impl Shared {
     }
 
     fn unclaim(&self, i: usize) {
-        self.found[i].fetch_sub(1, Ordering::AcqRel);
+        self.claimed[i].fetch_sub(1, Ordering::AcqRel);
     }
 
     fn mark_complete_if_done(&self, i: usize) {
-        if self.found[i].load(Ordering::Acquire) >= self.target
+        if self.saved[i].load(Ordering::Acquire) >= self.target
             && !self.completed[i].swap(true, Ordering::AcqRel)
         {
             self.generation.fetch_add(1, Ordering::AcqRel);
@@ -400,65 +506,100 @@ impl Shared {
     }
 
     /// Verify and save a candidate key found by a worker. `scalar` is the
-    /// secret scalar and `hash_prefix` the secret nonce prefix. Returns
-    /// `true` if the key was saved, in which case the caller must continue
-    /// from a fresh random key.
-    pub(crate) fn submit(&self, scalar: &[u8; 32], hash_prefix: &[u8; 32]) -> bool {
+    /// secret scalar and `hash_prefix` the secret nonce prefix.
+    pub(crate) fn submit(&self, scalar: &[u8; 32], hash_prefix: &[u8; 32]) -> Submitted {
+        if self.should_stop() {
+            return Submitted::Stop;
+        }
         // Keys walked from a clamped start stay clamped unless the 256-bit
         // addition overflowed, which cannot happen in practice.
         if !is_clamped(scalar) {
-            return false;
+            return Submitted::Rejected;
         }
         let secret = SecretKey::from_parts(scalar, hash_prefix);
         let pubkey = secret.public_key();
-        let chars = address_chars(&pubkey);
-        let index = match self.matcher.check(&chars, |i| self.wants(i)) {
+        self.submit_key(&secret, &pubkey)
+    }
+
+    /// [`Shared::submit`] for a key whose public key was already derived with
+    /// [`SecretKey::public_key`].
+    pub(crate) fn submit_key(&self, secret: &SecretKey, pubkey: &[u8; 32]) -> Submitted {
+        if self.should_stop() {
+            return Submitted::Stop;
+        }
+        let chars = address_chars(pubkey);
+        let mut index = match self.matcher.check(&chars, |i| self.wants(i)) {
             MatchResult::Match(i) => i,
             MatchResult::MissingContains => {
                 self.add_near_miss();
-                return false;
+                return Submitted::Rejected;
             }
-            MatchResult::NoMatch => return false,
+            MatchResult::NoMatch => return Submitted::Rejected,
         };
-        if !secret.self_test(&pubkey) {
+        if !secret.self_test(pubkey) {
             self.fail(
                 "internal error: a generated key failed its self-test; nothing was saved".into(),
             );
-            return false;
+            return Submitted::Stop;
         }
-        if !self.claim(index) {
-            return false;
+        // Another worker may just have taken the last slot of that pattern;
+        // the key may still be wanted for another one.
+        let mut taken = Vec::new();
+        while !self.claim(index) {
+            taken.push(index);
+            match self
+                .matcher
+                .check(&chars, |i| self.wants(i) && !taken.contains(&i))
+            {
+                MatchResult::Match(i) => index = i,
+                _ => return Submitted::Rejected,
+            }
         }
+        self.save(index, secret, pubkey)
+    }
 
-        let saved = write_hidden_service_dir(&self.output_dir, &secret)
-            .map_err(|e| {
-                format!(
-                    "could not save the key to {}: {e}",
+    /// Save a key claimed for pattern `index`. If that fails, keep the key and
+    /// retry until it works or the search is stopped.
+    fn save(&self, index: usize, secret: &SecretKey, pubkey: &[u8; 32]) -> Submitted {
+        let address = onion_address(pubkey);
+        let mut warned = false;
+        loop {
+            let error = match write_hidden_service_dir(&self.output_dir, secret) {
+                Ok(path) => {
+                    self.saved[index].fetch_add(1, Ordering::AcqRel);
+                    if warned {
+                        self.send(Event::Info(format!("{address} was saved after all.")));
+                    }
+                    self.send(Event::Found(Found {
+                        pattern: self.matcher.patterns()[index].to_string(),
+                        address,
+                        path,
+                    }));
+                    self.mark_complete_if_done(index);
+                    return Submitted::Saved;
+                }
+                Err(e) => format!(
+                    "could not save the keys for {address} in {}: {e}",
                     self.output_dir.display()
-                )
-            })
-            .and_then(|path| match verify_hidden_service_dir(&path) {
-                Ok(address) => Ok((path, address)),
-                Err(e) => Err(format!(
-                    "the saved key in {} failed verification: {e}",
-                    path.display()
-                )),
-            });
-        match saved {
-            Ok((path, address)) => {
-                self.send(Event::Found(Found {
-                    pattern: self.matcher.patterns()[index].to_string(),
-                    address,
-                    path,
-                }));
-                self.mark_complete_if_done(index);
-                true
-            }
-            Err(message) => {
+                ),
+            };
+            if self.should_stop() {
                 self.unclaim(index);
-                self.fail(message);
-                false
+                self.fail(format!(
+                    "{error}. The search was stopped before the keys could be saved, so this \
+                     address is lost."
+                ));
+                return Submitted::Stop;
             }
+            if !warned {
+                warned = true;
+                self.send(Event::Warning(format!(
+                    "{error}. Retrying every {} seconds: fix the problem (for example, free up \
+                     disk space) to keep this address. Stopping the search now loses it.",
+                    SAVE_RETRY.as_secs()
+                )));
+            }
+            self.sleep_unless_stopped(SAVE_RETRY);
         }
     }
 }
@@ -512,10 +653,11 @@ pub struct RateMeter {
 }
 
 impl RateMeter {
-    /// A meter averaging over the given window (e.g. 5 seconds).
+    /// A meter averaging over the given window (e.g. 5 seconds). Create it
+    /// when the search starts: it counts from zero keys at this moment.
     pub fn new(window: Duration) -> RateMeter {
         RateMeter {
-            samples: Default::default(),
+            samples: [(Instant::now(), 0)].into(),
             window,
         }
     }

@@ -30,7 +30,41 @@ fn run(renderer: eframe::Renderer) -> eframe::Result<()> {
     )
 }
 
+/// Show crashes in a message box: release builds on Windows have no console
+/// where the message would otherwise appear.
+fn install_panic_dialog() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        // Search threads report their own crashes in the window.
+        if std::thread::current().name() != Some("main") {
+            return;
+        }
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown error".into());
+        let location = info
+            .location()
+            .map(|l| format!(" ({}:{})", l.file(), l.line()))
+            .unwrap_or_default();
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Tor V3 Vanity Address Generator crashed")
+            .set_description(format!(
+                "Sorry, something went wrong: {message}{location}\n\nVersion {}. Please \
+                 report this at {}/issues",
+                torv3_vanity::VERSION,
+                app::REPO_URL
+            ))
+            .show();
+    }));
+}
+
 fn main() {
+    install_panic_dialog();
     // DirectX 12 / Vulkan / Metal first; OpenGL if that is unavailable (for
     // example in some virtual machines).
     let result = run(eframe::Renderer::Wgpu).or_else(|e| {

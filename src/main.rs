@@ -15,12 +15,19 @@ use torv3_vanity::search::{
     Event, GpuMode, RateMeter, Search, SearchConfig, available_threads, list_gpus,
 };
 
+/// `eprintln!` that ignores errors: a closed stderr must not crash a search.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 const EXAMPLES: &str = "\
 Examples:
   torv3-vanity shop                   address starting with \"shop\"
   torv3-vanity shop -o keys           ...saved in the folder \"keys\"
   torv3-vanity shop blog news         several patterns at once
-  torv3-vanity sh?p                   ? matches any single character
+  torv3-vanity \"sh?p\"                 ? matches any single character
   torv3-vanity shop -n 5              find 5 addresses to choose from
   torv3-vanity shop --anywhere        \"shop\" anywhere in the address
   torv3-vanity shop -c blog           starts with \"shop\" and contains \"blog\"
@@ -97,9 +104,9 @@ struct Cli {
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum GpuArg {
-    /// Use a dedicated graphics card if there is one.
+    /// Use a dedicated graphics card (or Apple Silicon) if there is one.
     Auto,
-    /// Use any available GPU, including integrated ones.
+    /// Use any available GPU, including integrated graphics.
     On,
     /// Use only the CPU.
     Off,
@@ -116,7 +123,7 @@ impl From<GpuArg> for GpuMode {
 }
 
 fn main() -> ExitCode {
-    if std::env::args_os().len() == 1 && console::launched_from_explorer() {
+    if std::env::args_os().len() == 1 && console::own_window() {
         println!("torv3-vanity is a command-line program.");
         println!("For the graphical version, open torv3-vanity-gui.exe instead.\n");
         println!("To use it, open a terminal (PowerShell) in this folder and run for example:\n");
@@ -128,10 +135,10 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
     let code = run(&cli).unwrap_or_else(|message| {
-        eprintln!("error: {message}");
+        say!("error: {message}");
         ExitCode::FAILURE
     });
-    if console::launched_from_explorer() {
+    if !cli.quiet && console::own_window() {
         console::pause();
     }
     code
@@ -158,7 +165,12 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         print_header(cli, &matcher, &estimate);
     }
     if cli.estimate {
-        let rate = measure_rate(threads, cli.gpu.into(), Duration::from_secs(5))?;
+        let rate = measure_rate(
+            threads,
+            cli.gpu.into(),
+            matcher.anywhere(),
+            Duration::from_secs(5),
+        )?;
         print_time_estimate(&estimate, rate);
         return Ok(ExitCode::SUCCESS);
     }
@@ -177,7 +189,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     let stats = search.stats();
     let rate = stats.keys_checked as f64 / stats.elapsed.as_secs_f64().max(1e-9);
     if !cli.quiet {
-        eprintln!();
+        say!();
         let summary = format!(
             "{} keys in {} ({})",
             format_count(stats.keys_checked as f64),
@@ -185,20 +197,20 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             format_rate(rate)
         );
         match outcome {
-            Outcome::Complete => eprintln!("Done: found {} address(es), {summary}.", stats.found),
-            Outcome::Interrupted => {
-                eprintln!("Stopped: found {} address(es), {summary}.", stats.found)
+            Outcome::Complete => say!("Done: found {} address(es), {summary}.", stats.found),
+            Outcome::Interrupted | Outcome::OutputClosed => {
+                say!("Stopped: found {} address(es), {summary}.", stats.found)
             }
-            Outcome::Failed => eprintln!("The search stopped because of an error ({summary})."),
+            Outcome::Failed => say!("The search stopped because of an error ({summary})."),
         }
         if stats.found > 0 {
-            eprintln!(
+            say!(
                 "Keep each folder's hs_ed25519_secret_key private: anyone who has it controls that address."
             );
         }
     }
     Ok(match outcome {
-        Outcome::Complete => ExitCode::SUCCESS,
+        Outcome::Complete | Outcome::OutputClosed => ExitCode::SUCCESS,
         Outcome::Interrupted => ExitCode::from(130),
         Outcome::Failed => ExitCode::FAILURE,
     })
@@ -221,50 +233,78 @@ fn build_matcher(cli: &Cli) -> Result<Matcher, PatternError> {
 }
 
 fn print_header(cli: &Cli, matcher: &Matcher, estimate: &Estimate) {
-    eprintln!("torv3-vanity {}", torv3_vanity::VERSION);
+    say!("torv3-vanity {}", torv3_vanity::VERSION);
     let place = if matcher.anywhere() {
         "anywhere in the address"
     } else {
         "at the start of the address"
     };
     let list: Vec<&str> = matcher.patterns().iter().map(Pattern::as_str).collect();
-    eprintln!("Searching for: {} ({place})", list.join(", "));
+    say!("Searching for: {} ({place})", list.join(", "));
     if !matcher.contains().is_empty() {
         let words: Vec<&str> = matcher.contains().iter().map(Pattern::as_str).collect();
-        eprintln!("Also containing: {}", words.join(", "));
+        say!("Also containing: {}", words.join(", "));
     }
-    match estimate.count {
+    match estimate.count() {
         Some(1) => {}
-        Some(n) => eprintln!("Addresses per pattern: {n}"),
-        None => eprintln!("Addresses per pattern: unlimited (press Ctrl+C to stop)"),
+        Some(n) => say!("Addresses per pattern: {n}"),
+        None => say!("Addresses per pattern: unlimited (press Ctrl+C to stop)"),
     }
-    eprintln!(
-        "Difficulty: {} per key, about {} keys expected",
+    let per = if estimate.count().is_some() {
+        "keys expected"
+    } else {
+        "keys per address"
+    };
+    say!(
+        "Difficulty: {} per key, about {} {per}",
         format_odds(estimate.hardest()),
         format_count(estimate.expected_keys())
     );
     if !cli.estimate {
         let output = std::path::absolute(&cli.output).unwrap_or_else(|_| cli.output.clone());
-        eprintln!("Saving to: {}", output.display());
+        say!("Saving to: {}", output.display());
     }
 }
 
 fn print_time_estimate(estimate: &Estimate, rate: f64) {
-    eprintln!("Measured speed: {}", format_rate(rate));
+    say!("Measured speed: {}", format_rate(rate));
     let time = |keys: f64| format_duration(keys / rate);
-    eprintln!("Expected time:  {}", time(estimate.expected_keys()));
-    if estimate.count == Some(1) {
-        eprintln!("50% chance within {}", time(estimate.keys_for_chance(0.5)));
-        eprintln!("90% chance within {}", time(estimate.keys_for_chance(0.9)));
-        eprintln!("99% chance within {}", time(estimate.keys_for_chance(0.99)));
+    if estimate.count().is_some() {
+        say!("Expected time:  {}", time(estimate.expected_keys()));
+        say!("50% chance within {}", time(estimate.keys_for_chance(0.5)));
+        say!("90% chance within {}", time(estimate.keys_for_chance(0.9)));
+        say!("99% chance within {}", time(estimate.keys_for_chance(0.99)));
+    } else {
+        say!(
+            "Expected time per address: {}",
+            time(estimate.expected_keys())
+        );
     }
-    eprintln!("Each extra character multiplies these times by 32.");
+    say!("Each extra character multiplies these times by 32.");
 }
 
 enum Outcome {
     Complete,
     Interrupted,
     Failed,
+    /// Whoever read the addresses (for example `head`) went away.
+    OutputClosed,
+}
+
+/// Print a found address on stdout.
+fn print_found(found: &torv3_vanity::search::Found, quiet: bool) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    if quiet {
+        writeln!(out, "{}", found.address)?;
+    } else {
+        writeln!(
+            out,
+            "Found {}  (pattern \"{}\")",
+            found.address, found.pattern
+        )?;
+        writeln!(out, "      saved in {}", found.path.display())?;
+    }
+    out.flush()
 }
 
 fn monitor(search: &Search, cli: &Cli, estimate: &Estimate, threads: usize) -> Outcome {
@@ -278,8 +318,9 @@ fn monitor(search: &Search, cli: &Cli, estimate: &Estimate, threads: usize) -> O
     let mut meter = RateMeter::new(Duration::from_secs(10));
     let mut last_draw = Instant::now();
     let mut failed = false;
+    let mut output_closed = false;
     if !cli.quiet {
-        eprintln!("CPU threads: {threads}");
+        say!("CPU threads: {threads}");
     }
 
     loop {
@@ -287,27 +328,26 @@ fn monitor(search: &Search, cli: &Cli, estimate: &Estimate, threads: usize) -> O
         match event {
             Some(Event::Found(found)) => {
                 progress.clear();
-                if cli.quiet {
-                    println!("{}", found.address);
-                } else {
-                    println!("Found {}  (pattern \"{}\")", found.address, found.pattern);
-                    println!("      saved in {}", found.path.display());
+                if !output_closed && print_found(&found, cli.quiet).is_err() {
+                    // Nobody is reading any more: finish the keys being
+                    // saved, then stop.
+                    output_closed = true;
+                    search.stop();
                 }
-                let _ = std::io::stdout().flush();
             }
             Some(Event::Info(message)) => {
                 progress.clear();
                 if !cli.quiet {
-                    eprintln!("{message}");
+                    say!("{message}");
                 }
             }
             Some(Event::Warning(message)) => {
                 progress.clear();
-                eprintln!("warning: {message}");
+                say!("warning: {message}");
             }
             Some(Event::Error(message)) => {
                 progress.clear();
-                eprintln!("error: {message}");
+                say!("error: {message}");
                 failed = true;
             }
             Some(Event::Finished) => break,
@@ -318,47 +358,78 @@ fn monitor(search: &Search, cli: &Cli, estimate: &Estimate, threads: usize) -> O
             last_draw = Instant::now();
             let stats = search.stats();
             let rate = meter.update(stats.keys_checked);
-            let mut line = format!(
-                "[{}] {} keys, {}",
-                clock(stats.elapsed),
-                format_count(stats.keys_checked as f64),
-                format_rate(rate)
-            );
-            if stats.gpu_keys_checked > 0 {
-                let share =
-                    100.0 * stats.gpu_keys_checked as f64 / stats.keys_checked.max(1) as f64;
-                line += &format!(" ({share:.0}% GPU)");
-            }
-            if estimate.count == Some(1) && stats.found == 0 {
-                let chance = estimate.chance_after(stats.keys_checked as f64);
-                line += &format!(", {:.0}% chance found by now", chance * 100.0);
-            } else if let Some(n) = estimate.count {
-                let total = n * estimate.per_pattern.len() as u64;
-                line += &format!(", found {}/{total}", stats.found);
-            } else {
-                line += &format!(", found {}", stats.found);
-            }
-            if rate > 0.0 {
-                line += &format!(
-                    ", ~{} expected",
-                    format_duration(estimate.expected_keys() / rate)
-                );
-            }
-            if stats.near_misses > 0 {
-                line += &format!(", {} missed a \"contains\" word", stats.near_misses);
-            }
-            progress.draw(&line);
+            progress.draw(&progress_line(&stats, rate, estimate));
         }
     }
     progress.clear();
 
     if failed {
         Outcome::Failed
+    } else if output_closed {
+        Outcome::OutputClosed
     } else if search.is_complete() {
         Outcome::Complete
     } else {
         Outcome::Interrupted
     }
+}
+
+/// The status line, kept within 79 columns so it can be redrawn in place:
+/// less important parts are left out when it would not fit.
+fn progress_line(stats: &torv3_vanity::search::Stats, rate: f64, estimate: &Estimate) -> String {
+    const WIDTH: usize = 79;
+    let mut line = format!(
+        "[{}] {} keys, {}",
+        clock(stats.elapsed),
+        format_count(stats.keys_checked as f64),
+        format_rate(rate)
+    );
+    let mut optional = Vec::new();
+    if stats.gpu_keys_checked > 0 {
+        let share = 100.0 * stats.gpu_keys_checked as f64 / stats.keys_checked.max(1) as f64;
+        optional.push(format!(" ({share:.0}% GPU)"));
+    }
+    match estimate.total() {
+        Some(_) if stats.found == 0 => {
+            let chance = estimate.chance_after(stats.keys_checked as f64);
+            line += &format!(", {:.0}% chance by now", chance * 100.0);
+        }
+        Some(total) => line += &format!(", found {}/{total}", stats.found),
+        None => line += &format!(", found {}", stats.found),
+    }
+    if rate > 0.0 {
+        let per = if estimate.count().is_some() {
+            "expected"
+        } else {
+            "per address"
+        };
+        line += &format!(", {} {per}", about(estimate.expected_keys() / rate));
+    }
+    if stats.near_misses > 0 {
+        optional.push(format!(
+            ", {} near misses",
+            format_count(stats.near_misses as f64)
+        ));
+    }
+    // The GPU share goes right after the rate; near misses at the end.
+    let mut gpu = String::new();
+    for part in optional {
+        if line.chars().count() + gpu.chars().count() + part.chars().count() > WIDTH {
+            continue;
+        }
+        if part.starts_with(" (") {
+            gpu = part;
+        } else {
+            line += &part;
+        }
+    }
+    if !gpu.is_empty() {
+        let at = line
+            .find(" keys/s")
+            .map_or(line.len(), |i| i + " keys/s".len());
+        line.insert_str(at, &gpu);
+    }
+    line
 }
 
 /// A status line that is redrawn in place on a terminal and printed as
@@ -393,6 +464,16 @@ impl ProgressLine {
     }
 }
 
+/// An approximate duration: "~5 min", but "under a second".
+fn about(seconds: f64) -> String {
+    let text = format_duration(seconds);
+    if text.starts_with("under") || text == "unknown" {
+        text
+    } else {
+        format!("~{text}")
+    }
+}
+
 fn clock(d: Duration) -> String {
     let s = d.as_secs();
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
@@ -403,7 +484,7 @@ fn install_ctrlc(search: &Search) {
     let stop = search.stop_handle();
     let _ = ctrlc::set_handler(move || {
         if PRESSES.fetch_add(1, Ordering::SeqCst) == 0 {
-            eprintln!("\nStopping... (press Ctrl+C again to quit immediately)");
+            say!("\nStopping... (press Ctrl+C again to quit immediately)");
             stop.stop();
         } else {
             std::process::exit(130);
@@ -412,11 +493,16 @@ fn install_ctrlc(search: &Search) {
 }
 
 /// Run a search for an unreachable pattern for `duration` and return the
-/// average rate.
-fn measure_rate(threads: usize, gpu: GpuMode, duration: Duration) -> Result<f64, String> {
+/// average rate. The measurement starts once the GPU (if any) is running.
+fn measure_rate(
+    threads: usize,
+    gpu: GpuMode,
+    anywhere: bool,
+    duration: Duration,
+) -> Result<f64, String> {
     let matcher = Matcher::new(
         vec![Pattern::parse(&"z".repeat(40)).expect("valid")],
-        false,
+        anywhere,
         vec![],
     )
     .expect("valid");
@@ -428,33 +514,67 @@ fn measure_rate(threads: usize, gpu: GpuMode, duration: Duration) -> Result<f64,
         gpu,
     })
     .map_err(|e| e.to_string())?;
+    let report = |event: Option<Event>| -> Result<bool, String> {
+        match event {
+            Some(Event::Error(message)) => Err(message),
+            Some(Event::Info(message)) => {
+                say!("{message}");
+                Ok(true)
+            }
+            Some(Event::Warning(message)) => {
+                say!("warning: {message}");
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    };
+
+    // Wait for the GPU to start (or to report that it will not be used):
+    // compiling the GPU program can take several seconds.
     let start = Instant::now();
-    // Let the GPU warm up (shader compilation) before measuring.
-    let mut base = (Instant::now(), 0u64);
-    let mut warmed = false;
-    while start.elapsed() < duration + Duration::from_secs(1) {
-        if let Some(Event::Error(message)) = search.next_event(Duration::from_millis(100)) {
-            return Err(message);
+    if gpu != GpuMode::Off && torv3_vanity::search::gpu_support() {
+        while start.elapsed() < Duration::from_secs(60) {
+            let event = search.next_event(Duration::from_millis(100));
+            let gpu_started =
+                matches!(&event, Some(Event::Info(m)) if m.starts_with("Using the GPU"));
+            let reported = report(event)?;
+            if gpu_started {
+                // Let it reach full speed.
+                std::thread::sleep(Duration::from_secs(1));
+                break;
+            }
+            if reported {
+                break;
+            }
         }
-        if !warmed && start.elapsed() >= Duration::from_secs(1) {
-            base = (Instant::now(), search.stats().keys_checked);
-            warmed = true;
-        }
+    } else {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    let base = (Instant::now(), search.stats().keys_checked);
+    while base.0.elapsed() < duration {
+        report(search.next_event(Duration::from_millis(100)))?;
     }
     let keys = search.stats().keys_checked - base.1;
     Ok(keys as f64 / base.0.elapsed().as_secs_f64())
 }
 
 fn benchmark(cli: &Cli, threads: usize, duration: Duration) -> Result<ExitCode, String> {
-    eprintln!("torv3-vanity {} benchmark", torv3_vanity::VERSION);
-    eprintln!("CPU threads: {threads}");
-    let rate = measure_rate(threads, cli.gpu.into(), duration)?;
-    println!("{}", format_rate(rate));
+    say!("torv3-vanity {} benchmark", torv3_vanity::VERSION);
+    say!("CPU threads: {threads}");
+    let rate = measure_rate(threads, cli.gpu.into(), cli.anywhere, duration)?;
+    let _ = writeln!(std::io::stdout(), "{}", format_rate(rate));
+    let place = if cli.anywhere {
+        "anywhere in the address"
+    } else {
+        "at the start"
+    };
     for chars in [5, 6, 7, 8] {
-        let keys = 32f64.powi(chars);
-        eprintln!(
-            "  {chars} characters: ~{} on average",
-            format_duration(keys / rate)
+        let pattern = Pattern::parse(&"a".repeat(chars)).expect("valid");
+        let keys = 1.0 / pattern.probability(cli.anywhere);
+        say!(
+            "  {chars} characters {place}: {} on average",
+            about(keys / rate)
         );
     }
     Ok(ExitCode::SUCCESS)
@@ -467,11 +587,13 @@ fn print_gpus() -> ExitCode {
     }
     for gpu in gpus {
         let kind = if gpu.software {
-            "software"
+            "software, only used for testing"
         } else if gpu.discrete {
             "dedicated"
+        } else if gpu.preferred {
+            "integrated, used by default"
         } else {
-            "integrated"
+            "integrated, used with --gpu on"
         };
         println!("{} ({}, {kind})", gpu.name, gpu.backend);
     }
@@ -495,8 +617,21 @@ fn verify(dir: &std::path::Path) -> Result<ExitCode, String> {
 /// Windows: detect being started by double-clicking in Explorer, where the
 /// console window would otherwise close before anything can be read.
 mod console {
+    use std::io::IsTerminal;
+
+    /// Whether this process has a console window of its own (nobody else is
+    /// attached to it) and is talking to it directly, which is what a
+    /// double-click in Explorer looks like. Programs started by scripts or
+    /// other software usually have their output redirected.
+    pub fn own_window() -> bool {
+        alone_in_console()
+            && std::io::stdin().is_terminal()
+            && std::io::stdout().is_terminal()
+            && std::io::stderr().is_terminal()
+    }
+
     #[cfg(windows)]
-    pub fn launched_from_explorer() -> bool {
+    fn alone_in_console() -> bool {
         use windows_sys::Win32::System::Console::GetConsoleProcessList;
         let mut pids = [0u32; 2];
         // SAFETY: the buffer is valid for `pids.len()` elements.
@@ -505,12 +640,12 @@ mod console {
     }
 
     #[cfg(not(windows))]
-    pub fn launched_from_explorer() -> bool {
+    fn alone_in_console() -> bool {
         false
     }
 
     pub fn pause() {
-        println!("\nPress Enter to close this window.");
+        eprintln!("\nPress Enter to close this window.");
         let _ = std::io::stdin().read_line(&mut String::new());
     }
 }

@@ -1,8 +1,8 @@
 //! Application state and user interface.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
 use torv3_vanity::estimate::{Estimate, format_count, format_duration, format_odds, format_rate};
@@ -11,10 +11,13 @@ use torv3_vanity::search::{
     self, Event, Found, GpuInfo, GpuMode, RateMeter, Search, SearchConfig, Stats,
 };
 
-const REPO_URL: &str = "https://github.com/Mxrider007/tor-v3-vanity-address-generator";
+pub const REPO_URL: &str = "https://github.com/Mxrider007/tor-v3-vanity-address-generator";
 
 /// Rough keys/second per CPU thread, used for estimates before the first run.
-const GUESS_RATE_PER_THREAD: f64 = 4.0e6;
+const GUESS_RATE_PER_THREAD: f64 = 5.0e6;
+
+/// Results shown in the list; the rest are only in the keys folder.
+const MAX_SHOWN: usize = 100;
 
 const GREEN: Color32 = Color32::from_rgb(34, 160, 90);
 const AMBER: Color32 = Color32::from_rgb(214, 140, 20);
@@ -30,32 +33,36 @@ struct Settings {
     count: u32,
     output_dir: PathBuf,
     threads: usize,
-    /// Use the GPU; `None` means "only if it is a dedicated card".
+    /// Use the GPU; `None` means "if it is a dedicated card or Apple Silicon".
     use_gpu: Option<bool>,
     /// Speed measured during the last long-enough search.
     measured: Option<Measured>,
 }
 
-/// A measured search speed and the hardware settings it was measured with.
+/// A measured search speed and the settings it was measured with.
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Measured {
     rate: f64,
     threads: usize,
     gpu: bool,
+    /// "Anywhere" searches are slower and never use the GPU.
+    #[serde(default)]
+    anywhere: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        let docs = directories::UserDirs::new()
-            .and_then(|d| d.document_dir().map(Path::to_path_buf))
-            .or_else(|| directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()))
+        // The home folder rather than Documents or the Desktop, which are
+        // often uploaded to OneDrive or iCloud.
+        let home = directories::BaseDirs::new()
+            .map(|d| d.home_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         Settings {
             patterns: String::new(),
             contains: String::new(),
             anywhere: false,
             count: 1,
-            output_dir: docs.join("Tor Vanity Keys"),
+            output_dir: home.join("Tor Vanity Keys"),
             threads: search::available_threads(),
             use_gpu: None,
             measured: None,
@@ -67,7 +74,7 @@ impl Default for Settings {
 struct Run {
     search: Search,
     threads: usize,
-    gpu: bool,
+    anywhere: bool,
     estimate: Estimate,
     meter: RateMeter,
     rate: f64,
@@ -124,27 +131,46 @@ impl App {
         self.run.as_ref().is_some_and(|r| !r.finished)
     }
 
-    /// The GPU that will be used, if any: a dedicated card first, otherwise
-    /// integrated graphics (never software renderers).
+    /// The GPU that will be used, if any: a dedicated card or Apple Silicon
+    /// first, otherwise integrated graphics (never software renderers).
     fn best_gpu(&self) -> Option<&GpuInfo> {
         let gpus = self.gpus.as_ref()?;
         gpus.iter()
-            .find(|g| g.discrete)
+            .find(|g| g.preferred)
             .or_else(|| gpus.iter().find(|g| !g.software))
             .or_else(|| gpus.iter().find(|_| search::software_gpu_allowed()))
     }
 
-    /// Whether the GPU will be used (defaults to dedicated cards only).
+    /// Whether the GPU box is ticked (by default for dedicated cards and
+    /// Apple Silicon).
     fn use_gpu(&self) -> bool {
         self.best_gpu()
-            .is_some_and(|gpu| self.settings.use_gpu.unwrap_or(gpu.discrete))
+            .is_some_and(|gpu| self.settings.use_gpu.unwrap_or(gpu.preferred))
     }
 
     fn gpu_mode(&self) -> GpuMode {
-        if self.use_gpu() {
+        if self.settings.anywhere {
+            // The GPU only searches at the start of the address.
+            GpuMode::Off
+        } else if self.gpus.is_none() {
+            // Still looking for graphics cards: let the search decide.
+            GpuMode::Auto
+        } else if self.use_gpu() {
             GpuMode::On
         } else {
             GpuMode::Off
+        }
+    }
+
+    /// Why keys cannot be saved in the chosen folder, if they cannot.
+    fn output_problem(&self) -> Option<&'static str> {
+        let dir = &self.settings.output_dir;
+        if dir.as_os_str().is_empty() {
+            Some("Choose a folder to save the keys in.")
+        } else if !dir.is_absolute() {
+            Some("Enter the full path of the folder (or use Browse…).")
+        } else {
+            None
         }
     }
 
@@ -172,10 +198,17 @@ impl App {
         }
         let threads = self.settings.threads;
         let gpu = self.gpu_mode() != GpuMode::Off;
+        let anywhere = self.settings.anywhere;
         match self.settings.measured {
-            Some(m) if m.threads == threads && m.gpu == gpu => (m.rate, true),
+            Some(m) if m.threads == threads && m.gpu == gpu && m.anywhere == anywhere => {
+                (m.rate, true)
+            }
             // CPU speed scales with the number of threads.
-            Some(m) if !m.gpu && !gpu => (m.rate * threads as f64 / m.threads as f64, false),
+            Some(m) if !m.gpu && !gpu && m.anywhere == anywhere => {
+                (m.rate * threads as f64 / m.threads as f64, false)
+            }
+            // "Anywhere" searches run at about 60% of the speed.
+            _ if anywhere => (threads as f64 * GUESS_RATE_PER_THREAD * 0.6, false),
             _ => (threads as f64 * GUESS_RATE_PER_THREAD, false),
         }
     }
@@ -185,6 +218,9 @@ impl App {
             Ok(m) => m,
             Err(_) => return,
         };
+        if self.output_problem().is_some() {
+            return;
+        }
         let count = self.count();
         let estimate = Estimate::new(&matcher, count);
         let gpu = self.gpu_mode();
@@ -201,7 +237,7 @@ impl App {
                 self.run = Some(Run {
                     search,
                     threads: self.settings.threads,
-                    gpu: gpu != GpuMode::Off,
+                    anywhere: self.settings.anywhere,
                     estimate,
                     meter: RateMeter::new(Duration::from_secs(8)),
                     rate: 0.0,
@@ -215,11 +251,16 @@ impl App {
     }
 
     fn poll(&mut self) {
-        if let Some(rx) = &self.gpu_probe
-            && let Ok(gpus) = rx.try_recv()
-        {
-            self.gpus = Some(gpus);
-            self.gpu_probe = None;
+        if let Some(rx) = &self.gpu_probe {
+            match rx.try_recv() {
+                Ok(gpus) => self.gpus = Some(gpus),
+                // The probe crashed (for example in a graphics driver).
+                Err(TryRecvError::Disconnected) => self.gpus = Some(Vec::new()),
+                Err(TryRecvError::Empty) => {}
+            }
+            if self.gpus.is_some() {
+                self.gpu_probe = None;
+            }
         }
 
         let Some(run) = &mut self.run else { return };
@@ -228,7 +269,7 @@ impl App {
         }
         while let Some(event) = run.search.try_event() {
             match event {
-                Event::Found(found) => self.found.insert(0, found),
+                Event::Found(found) => self.found.push(found),
                 Event::Info(m) => self.messages.push(Message::Info(m)),
                 Event::Warning(m) => self.messages.push(Message::Warning(m)),
                 Event::Error(m) => {
@@ -241,13 +282,29 @@ impl App {
         // After `Finished` this records the final totals once.
         run.stats = run.search.stats();
         run.rate = run.meter.update(run.stats.keys_checked);
-        let seconds = run.stats.elapsed.as_secs_f64();
-        if seconds > 3.0 {
+        // Remember the recent speed once the GPU (if any) has warmed up,
+        // unless saving many keys slowed the search down.
+        if !run.finished
+            && run.stats.elapsed > Duration::from_secs(10)
+            && run.rate > 0.0
+            && run.stats.found <= run.estimate.patterns() as u64
+        {
             self.settings.measured = Some(Measured {
-                rate: run.stats.keys_checked as f64 / seconds,
+                rate: run.rate,
                 threads: run.threads,
-                gpu: run.gpu,
+                gpu: run.stats.gpu_keys_checked > 0,
+                anywhere: run.anywhere,
             });
+        }
+    }
+
+    /// Open a file or folder in the system's file manager.
+    fn open(&mut self, path: &Path) {
+        if let Err(e) = open::that_detached(path) {
+            self.messages.push(Message::Warning(format!(
+                "could not open {}: {e}",
+                path.display()
+            )));
         }
     }
 }
@@ -255,6 +312,17 @@ impl App {
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &self.settings);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Give a key that is being saved the chance to finish.
+        if let Some(run) = &self.run {
+            run.search.stop();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !run.search.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -296,8 +364,8 @@ impl eframe::App for App {
                     self.action_section(ui);
                     ui.add_space(6.0);
                     self.messages_section(ui);
-                    self.results_section(ui);
                     self.progress_section(ui);
+                    self.results_section(ui);
                     ui.add_space(8.0);
                     help_section(ui);
                 });
@@ -370,11 +438,23 @@ impl App {
                     {
                         self.settings.output_dir = dir;
                     }
-                    if ui.button("Open").clicked() {
-                        let _ = std::fs::create_dir_all(&self.settings.output_dir);
-                        let _ = open::that(&self.settings.output_dir);
+                    if ui.button("Open").clicked() && self.output_problem().is_none() {
+                        let dir = self.settings.output_dir.clone();
+                        let _ = std::fs::create_dir_all(&dir);
+                        self.open(&dir);
                     }
                 });
+                if let Some(problem) = self.output_problem() {
+                    ui.colored_label(RED, problem);
+                } else if let Some(service) = cloud_synced(&self.settings.output_dir) {
+                    ui.colored_label(
+                        AMBER,
+                        format!(
+                            "⚠ This folder may be uploaded to {service}. Your secret keys \
+                             should not leave this computer: choose a folder that is not synced."
+                        ),
+                    );
+                }
             });
 
             section(ui, "3. Hardware", |ui| {
@@ -392,16 +472,26 @@ impl App {
                     }
                     (Some(_), Some(gpu)) => {
                         let mut use_gpu = self.use_gpu();
+                        let anywhere = self.settings.anywhere;
                         if ui
-                            .checkbox(
-                                &mut use_gpu,
-                                format!("Also use the graphics card: {} ({})", gpu.name, gpu.backend),
+                            .add_enabled(
+                                !anywhere,
+                                egui::Checkbox::new(
+                                    &mut use_gpu,
+                                    format!("Also use the graphics card: {} ({})", gpu.name, gpu.backend),
+                                ),
                             )
                             .changed()
                         {
                             self.settings.use_gpu = Some(use_gpu);
                         }
-                        if !gpu.discrete && use_gpu {
+                        if anywhere {
+                            ui.label(
+                                RichText::new("The graphics card only helps with text at the start of the address.")
+                                    .small()
+                                    .weak(),
+                            );
+                        } else if !gpu.preferred && use_gpu {
                             ui.label(
                                 RichText::new("This is integrated graphics; it may add little speed.")
                                     .small()
@@ -437,10 +527,14 @@ impl App {
                         let label = if measured { "measured" } else { "rough guess" };
                         ui.label(format!("{} ({label})", format_rate(rate)));
                         ui.end_row();
-                        ui.label("Expected time:");
+                        ui.label(if estimate.count().is_some() {
+                            "Expected time:"
+                        } else {
+                            "Time per address:"
+                        });
                         ui.colored_label(color, RichText::new(format_duration(seconds)).strong());
                         ui.end_row();
-                        if estimate.count == Some(1) {
+                        if estimate.count().is_some() {
                             ui.label("Very likely (90%) within:");
                             ui.label(format_duration(estimate.keys_for_chance(0.9) / rate));
                             ui.end_row();
@@ -468,7 +562,7 @@ impl App {
                     run.search.stop();
                 }
             } else {
-                let ready = self.build_matcher().is_ok();
+                let ready = self.build_matcher().is_ok() && self.output_problem().is_none();
                 let button =
                     egui::Button::new(RichText::new("▶  Start search").size(18.0).strong());
                 if ui
@@ -526,16 +620,12 @@ impl App {
                     ui.label(format_count(stats.keys_checked as f64));
                     ui.end_row();
                     ui.label("Found:");
-                    match run.estimate.count {
-                        Some(n) => ui.label(format!(
-                            "{} of {}",
-                            stats.found,
-                            n * run.estimate.per_pattern.len() as u64
-                        )),
+                    match run.estimate.total() {
+                        Some(total) => ui.label(format!("{} of {total}", stats.found)),
                         None => ui.label(stats.found.to_string()),
                     };
                     ui.end_row();
-                    if run.estimate.count == Some(1) && stats.found == 0 {
+                    if run.estimate.total().is_some() && stats.found == 0 {
                         ui.label("Chance found by now:");
                         let chance = run.estimate.chance_after(stats.keys_checked as f64);
                         ui.add(
@@ -549,7 +639,7 @@ impl App {
                         ui.label("Near misses:");
                         ui.label(format!(
                             "{} matched but lacked a \"must also contain\" word",
-                            stats.near_misses
+                            format_count(stats.near_misses as f64)
                         ));
                         ui.end_row();
                     }
@@ -572,8 +662,10 @@ impl App {
             return;
         }
         let mut clear = false;
+        let mut open = None;
         section(ui, "Your addresses", |ui| {
-            for found in &self.found {
+            // Newest first; a long list would make the window sluggish.
+            for found in self.found.iter().rev().take(MAX_SHOWN) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("✔").color(GREEN));
                     ui.add(
@@ -587,20 +679,60 @@ impl App {
                         ui.ctx().copy_text(found.address.clone());
                     }
                     if ui.button("📁 Show keys folder").clicked() {
-                        let _ = open::that(&found.path);
+                        open = Some(found.path.clone());
                     }
                     ui.label(RichText::new(format!("matched \"{}\"", found.pattern)).weak());
                 });
                 ui.add_space(4.0);
             }
+            if self.found.len() > MAX_SHOWN {
+                ui.label(
+                    RichText::new(format!(
+                        "…and {} more in the keys folder.",
+                        self.found.len() - MAX_SHOWN
+                    ))
+                    .weak(),
+                );
+            }
             if !self.running() && ui.small_button("Clear list").clicked() {
                 clear = true;
             }
         });
+        if let Some(path) = open {
+            self.open(&path);
+        }
         if clear {
             self.found.clear();
         }
     }
+}
+
+/// The cloud service that probably uploads `path`, judging by its name.
+fn cloud_synced(path: &Path) -> Option<&'static str> {
+    let lower = path.to_string_lossy().to_lowercase();
+    let known = [
+        ("onedrive", "OneDrive"),
+        ("dropbox", "Dropbox"),
+        ("google drive", "Google Drive"),
+        ("googledrive", "Google Drive"),
+        ("icloud", "iCloud Drive"),
+        ("mobile documents", "iCloud Drive"),
+        ("nextcloud", "Nextcloud"),
+    ];
+    if let Some((_, service)) = known.iter().find(|(needle, _)| lower.contains(needle)) {
+        return Some(service);
+    }
+    // macOS can upload Desktop and Documents to iCloud Drive.
+    if cfg!(target_os = "macos")
+        && let Some(dirs) = directories::UserDirs::new()
+        && [dirs.desktop_dir(), dirs.document_dir()]
+            .into_iter()
+            .flatten()
+            .any(|d| path.starts_with(d))
+    {
+        return Some("iCloud Drive (if Desktop & Documents syncing is on)");
+    }
+    None
 }
 
 fn help_section(ui: &mut egui::Ui) {

@@ -12,7 +12,7 @@ use crate::curve::walk::{Center, GroupWalker, group_offset};
 use crate::onion::{address_chars, pubkey_chars};
 use crate::pattern::{MatchResult, PrefixFilter};
 
-use super::{Shared, Walk};
+use super::{Shared, Submitted, Walk};
 
 /// Half-size of a key group: each group covers `2 * GROUP + 1` keys and costs
 /// one field inversion. 256 keeps the per-thread working set (~80 KiB) in L2
@@ -84,14 +84,22 @@ pub(super) fn run(shared: &Shared) {
             walker.step();
 
             for (index, y) in walker.ys.iter().enumerate() {
-                if !anywhere && !active.filters.iter().any(|f| f.test(y)) {
+                if anywhere {
+                    // Most keys are ruled out by y alone, before x is computed.
+                    if !shared
+                        .matcher
+                        .may_match_anywhere(&pubkey_chars(y), false, |i| active.wanted[i])
+                    {
+                        continue;
+                    }
+                } else if !active.filters.iter().any(|f| f.test(y)) {
                     continue;
                 }
                 let pubkey = walker.pubkey(index);
                 if anywhere
                     && !shared
                         .matcher
-                        .may_match_anywhere(&pubkey_chars(&pubkey), |i| active.wanted[i])
+                        .may_match_anywhere(&pubkey_chars(&pubkey), true, |i| active.wanted[i])
                 {
                     continue;
                 }
@@ -110,9 +118,13 @@ pub(super) fn run(shared: &Shared) {
                 let key = center
                     .checked_add_signed(group_offset(index))
                     .expect("in range");
-                if shared.submit(&walk.scalar(key), walk.start.hash_prefix()) {
-                    shared.add_keys(index as u64 + 1);
-                    continue 'walk;
+                match shared.submit(&walk.scalar(key), walk.start.hash_prefix()) {
+                    Submitted::Rejected => {}
+                    Submitted::Saved => {
+                        shared.add_keys(index as u64 + 1);
+                        continue 'walk;
+                    }
+                    Submitted::Stop => return,
                 }
             }
             shared.add_keys(keys_per_group);

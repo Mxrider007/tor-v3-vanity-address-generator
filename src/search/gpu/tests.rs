@@ -65,7 +65,7 @@ fn walk_key_indices() {
 }
 
 fn test_gpu(threads: u32, filters: usize) -> Gpu {
-    let adapter = choose(GpuMode::On, true).expect(
+    let adapter = choose(GpuMode::On, true).into_iter().next().expect(
         "no GPU found (on Linux, install mesa-vulkan-drivers for the lavapipe software GPU)",
     );
     eprintln!("testing on {:?}", adapter.get_info());
@@ -148,14 +148,46 @@ fn kernel_matches_cpu_walker() {
     let gpu = test_gpu(threads, filters.len());
     gpu.upload_centers(&walk.centers(threads));
     gpu.upload_filters(&filters);
-    let hits = gpu
+    let (hits, total) = gpu
         .dispatch(groups, threads, filters.len() as u32, 2)
         .unwrap();
+    assert_eq!(total as usize, hits.len());
 
     let got: HashSet<Hit> = hits.into_iter().collect();
     let want: HashSet<Hit> = targets.iter().map(|(h, _)| *h).collect();
     assert_eq!(got, want);
     assert_eq!(gpu.read_centers(threads), next_centers);
+}
+
+/// The start-up self-test passes on a working GPU, and catches a broken one.
+#[test]
+#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
+fn self_test_detects_wrong_results() {
+    let gpu = test_gpu(8, 1);
+    gpu.self_test().unwrap();
+    // Wrong arithmetic gives wrong points, like a slightly wrong start point.
+    assert!(
+        gpu.check_against_cpu(|centers| centers[8] ^= 1 << 4)
+            .is_err()
+    );
+    gpu.self_test().unwrap();
+}
+
+/// More candidates than MAX_HITS: only the recorded share of keys counts.
+#[test]
+#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
+fn hit_overflow_is_reported() {
+    let threads = 64u32;
+    let gpu = test_gpu(threads, 1);
+    let walk = GpuWalk::new().unwrap();
+    gpu.upload_centers(&walk.centers(threads));
+    // Match every key whose y starts with a 0 bit: about half of them.
+    let mut filter = [0u32; 16];
+    filter[0] = 1;
+    gpu.upload_filters(&[filter]);
+    let (hits, total) = gpu.dispatch(1, threads, 1, 1).unwrap();
+    assert_eq!(hits.len(), MAX_HITS);
+    assert!(total as usize > MAX_HITS, "{total}");
 }
 
 /// A complete search on the GPU alone; every key is verified by the CPU.
