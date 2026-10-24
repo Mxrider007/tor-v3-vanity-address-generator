@@ -12,9 +12,10 @@ QUICK START
 4. When it is done, click "Show keys folder".
 
 Nothing needs to be installed. A dedicated graphics card (NVIDIA, AMD or
-Intel) is used automatically if one is found - no CUDA or other toolkit is
-needed. Tick the graphics card box in the app to also use integrated
-graphics.
+Intel) is used automatically if one is found: NVIDIA cards through CUDA,
+other cards (and NVIDIA cards older than the GeForce GTX 750, or whose
+driver has no CUDA) through Vulkan or DirectX 12. Only the normal graphics driver is needed, no CUDA toolkit.
+Tick the graphics card box in the app to also use integrated graphics.
 
 
 WHAT YOU GET
