@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Print the GitHub release notes for a tag: download instructions followed by
+# the matching CHANGELOG.md section.   packaging/release-notes.sh v1.0.0
+set -euo pipefail
+
+tag=$1
+version=${tag#v}
+# Set by GitHub Actions; the fallback is for running the script by hand.
+repo="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-Mxrider007/tor-v3-vanity-address-generator}"
+download="$repo/releases/download/$tag"
+section=$(awk -v v="$version" '
+  /^## \[/ { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
+  found { print }
+' CHANGELOG.md)
+if [ -z "$section" ]; then
+  echo "CHANGELOG.md has no section for $version" >&2
+  exit 1
+fi
+
+cat <<NOTES
+## Download
+
+| System | File |
+|---|---|
+| **Windows 10/11** (64-bit) | [\`torv3-vanity-$tag-windows-x64.zip\`]($download/torv3-vanity-$tag-windows-x64.zip) |
+| **macOS 11+** (Apple Silicon and Intel) | [\`torv3-vanity-$tag-macos-universal.zip\`]($download/torv3-vanity-$tag-macos-universal.zip) |
+| **Linux** (x86-64) | [\`torv3-vanity-$tag-linux-x64.tar.gz\`]($download/torv3-vanity-$tag-linux-x64.tar.gz) |
+
+**Windows:** download the zip, right-click it and choose **Extract All**, then double-click **torv3-vanity-gui.exe**.
+If Windows shows *"Windows protected your PC"*, click **More info → Run anyway** (the program is not code-signed).
+No installation, drivers or toolkits are needed; the graphics card is used automatically if it helps.
+
+Check your download against \`SHA256SUMS.txt\` (\`Get-FileHash <file>\` in PowerShell, \`sha256sum <file>\` on Linux/macOS).
+Files built by this repository's Release workflow can also be checked with the [GitHub CLI](https://cli.github.com/): \`gh attestation verify <file> --repo ${repo#*://*/}\`.
+
+$section
+NOTES

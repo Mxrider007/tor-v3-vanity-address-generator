@@ -1,58 +1,76 @@
 [package]
-name = "kore-vanity"
-version = "0.1.0"
-edition = "2021"
-description = "Vanity onion address generator with GPU acceleration and CPU fallback"
-license = "MIT"
-repository = "https://github.com/Mxrider420z/kore-vanity"
+name = "torv3-vanity"
+description = "Fast Tor v3 .onion vanity address generator for CPU and GPU, with a GUI and a command-line tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 readme = "README.md"
-keywords = ["tor", "onion", "vanity", "gpu", "cuda"]
+keywords = ["tor", "onion", "vanity", "ed25519", "gpu"]
+categories = ["command-line-utilities", "cryptography"]
+default-run = "torv3-vanity"
+# Distributed as binaries from GitHub releases, not through crates.io.
+publish = false
 
 [workspace]
-members = ["core", "gui"]
+members = ["gui"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/Mxrider007/tor-v3-vanity-address-generator"
+authors = ["Mxrider007"]
 
 [lib]
-name = "kore_vanity"
+name = "torv3_vanity"
 path = "src/lib.rs"
 
 [[bin]]
-name = "kore-vanity"
-test = false
-bench = false
+name = "torv3-vanity"
 path = "src/main.rs"
+required-features = ["cli"]
 
-# By default the CLI/library build CPU-only plus the *external* CUDA backend
-# (which just spawns the standalone `vanity_torv3_cuda` binary and needs no CUDA
-# toolkit to compile). This links on any machine. Enable `--features cuda` for
-# the built-in rustacuda GPU/hybrid backends, which require the CUDA toolkit and
-# a working `libcuda` to link.
 [features]
-default = []
-cuda = ["dep:rustacuda", "dep:kore-vanity-core"]
-ptx-builder = ["dep:ptx-builder"]
+default = ["cli", "gpu"]
+# The command-line program.
+cli = ["dep:clap", "dep:ctrlc", "dep:windows-sys"]
+# GPU acceleration through wgpu (Vulkan, DirectX 12 or Metal; any vendor).
+gpu = ["dep:wgpu", "dep:pollster"]
 
 [dependencies]
-base32 = "0.5"
-chrono = "0.4"
-clap = { version = "4", features = ["derive"] }
-crossbeam-channel = "0.5"
-curve25519-dalek = "4"
-ed25519-dalek = { version = "2", features = ["rand_core", "hazmat"] }
-num_cpus = "1.16"
-rand = "0.8"
-rayon = "1.10"
-sha2 = "0.10"
-sha3 = "0.10"
-thiserror = "1.0"
-ctrlc = "3.4"
+curve25519-dalek = "5"
+ed25519-dalek = { version = "3", features = ["hazmat"] }
+fiat-crypto = { version = "0.3", default-features = false }
+getrandom = "0.4"
+sha2 = "0.11"
+sha3 = "0.12"
+thiserror = "2"
+zeroize = "1.8"
 
-rustacuda = { version = "0.1.2", optional = true }
-kore-vanity-core = { version = "0.1.0", path = "./core", optional = true }
+clap = { version = "4.6", features = ["derive", "wrap_help"], optional = true }
+ctrlc = { version = "3.5", optional = true }
 
-[build-dependencies]
-ptx-builder = { version = "0.5", optional = true }
+wgpu = { version = "30", optional = true, default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "metal", "vulkan"] }
+pollster = { version = "1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Console"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [profile.release]
-lto = true
+lto = "fat"
+codegen-units = 1
 strip = true
+
+# Keep tests of the crypto code fast in debug builds.
+[profile.dev.package."*"]
 opt-level = 3
+
+[profile.dev]
+opt-level = 1

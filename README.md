@@ -1,377 +1,300 @@
-# Kore Vanity
+<div align="center">
 
-High-performance generator for **Tor v3 (`.onion`) vanity hidden-service addresses**, with optional GPU acceleration and a multi-threaded CPU fallback.
+<img src="gui/assets/icon.png" width="96" alt="Tor V3 Vanity Address Generator icon">
 
-Generate custom addresses that start with (or contain) your chosen text, e.g. `korexxxx…xxxx.onion`, ready to drop straight into a Tor hidden service.
+# Tor V3 Vanity Address Generator
+
+**Create a custom Tor `.onion` address that starts with the text you choose.**
+
+Fast, free and open source: runs on your CPU and on any modern graphics card, with an easy app and a command-line tool for Windows, macOS and Linux.
+
+[![CI](https://github.com/Mxrider007/tor-v3-vanity-address-generator/actions/workflows/ci.yml/badge.svg)](https://github.com/Mxrider007/tor-v3-vanity-address-generator/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Mxrider007/tor-v3-vanity-address-generator)](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**[⬇ Download for Windows, macOS and Linux](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/latest)**
+
+</div>
 
 ---
+
+A Tor v3 onion address is 56 random-looking characters, like
+`2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion`. This tool
+generates keys until it finds one whose address starts with the text you want,
+for example **`shop`**`qmr7vp4…`**`.onion`**, and saves it in the format Tor
+uses, ready to go.
+
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Using the app](#using-the-app)
+- [Command line](#command-line)
+- [How long will it take?](#how-long-will-it-take)
+- [What you get](#what-you-get)
+- [Using your address with Tor](#using-your-address-with-tor)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [Building from source](#building-from-source)
+- [How it works](#how-it-works)
 
 ## Features
 
-- **CPU backend** – multi-threaded (Rayon), works everywhere, no special hardware.
-- **GPU acceleration** – two options:
-  - **External CUDA** (recommended): drives the standalone [`vanity_torv3_cuda`](https://github.com/Danukeru/torv3_vanity_addr_cuda) binary. Builds with no CUDA toolchain; the binary just has to sit next to `kore-vanity`.
-  - **Built-in CUDA** (`--features cuda`): an in-process `rustacuda` kernel. Single binary, but requires the CUDA Toolkit to compile/link.
-- **Hybrid mode** – run CPU and GPU together.
-- **Pattern language** – `?` single-character wildcard, multiple comma-separated prefixes, `--contains` words, and `--anywhere` matching (see [Matching & wildcards](#matching--wildcards) for which backends support what).
-- **Tor-compatible output** – every backend writes a complete hidden-service directory (`hostname`, `hs_ed25519_public_key`, `hs_ed25519_secret_key`, `authorized_clients/`) with correct permissions.
-- **GUI and CLI**, live probability/ETA estimates, and a `Ctrl-C`-safe CLI.
-
----
+- **Easy app**: type your text, press *Start*, done. There's also a full command-line tool.
+- **Fast**: about 6 million keys per second per CPU core.
+- **Uses your graphics card**: NVIDIA, AMD, Intel or Apple GPUs through Vulkan, DirectX 12 or Metal. No CUDA or other toolkit is needed.
+- **Safe keys**: every key is re-derived independently, signature-tested, written, read back and verified before it is shown. Keys are checked in CI with a real Tor client.
+- **Ready for Tor**: saves the exact files Tor expects (`hostname`, `hs_ed25519_secret_key`, …).
+- **Flexible patterns**: several patterns at once, `?` wildcards, "anywhere in the address", "must also contain", and several results per pattern.
+- **Honest estimates**: shows the expected time and the chance that it has found your address by now.
 
 ## Quick start
 
-> ⚠️ **Security:** a `.onion` secret key *is* the identity of your service. Anyone with `hs_ed25519_secret_key` can impersonate it. Keep generated directories private and never commit or share them.
+### Windows 10/11
 
-### Linux / macOS
+1. Download **`torv3-vanity-…-windows-x64.zip`** from the [latest release](https://github.com/Mxrider007/tor-v3-vanity-address-generator/releases/latest).
+2. Right-click the zip and choose **Extract All**.
+3. Double-click **`torv3-vanity-gui.exe`**.
+   If Windows shows *"Windows protected your PC"*, click **More info → Run anyway**. The app isn't code-signed, which is why Windows asks.
+4. Type the text your address should start with (for example `shop`) and click **Start search**.
+5. When it's done, click **Show keys folder**.
+
+Nothing needs to be installed.
+
+### macOS 11+ (Apple Silicon and Intel)
+
+Download **`…-macos-universal.zip`**, unzip it and open **Tor V3 Vanity.app**. The app is not notarized by Apple, so macOS refuses to open it the first time. Go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** (on macOS 11–14 you can instead Control-click the app and choose **Open**). Or run this in Terminal, in the unzipped folder:
 
 ```bash
-# Build (CPU + external-CUDA support; links on any machine)
-cargo build --release
-
-# Find an address starting with "kore"
-./target/release/kore-vanity kore --dst ./keys
-
-# Launch the GUI
-cargo build -p kore-vanity-gui --release
-./target/release/kore-vanity-gui
+xattr -dr com.apple.quarantine "Tor V3 Vanity.app" torv3-vanity
 ```
+
+### Linux (x86-64)
+
+Download **`…-linux-x64.tar.gz`**, extract it and run `./torv3-vanity-gui` (app) or `./torv3-vanity shop` (command line). It runs on any distribution with glibc 2.28 or newer. For GPU support, install your Vulkan driver (for example `mesa-vulkan-drivers` or the NVIDIA driver).
+
+## Using the app
+
+1. **Your address**: type the text the address should start with. Separate several patterns with commas to search for all of them at once. Use `?` for "any character". Tick *Allow the text anywhere* to accept it at any position; that is about 50 times more likely per key, but it doesn't use the graphics card. *Must also contain* adds words that must appear somewhere in the address as well.
+2. **Where to save the keys**: by default `Tor Vanity Keys` in your home folder (`C:\Users\<you>\Tor Vanity Keys` on Windows). The app warns you if the folder looks like it's synced to OneDrive, iCloud, Dropbox or Google Drive, because your secret keys would be uploaded there.
+3. **Hardware**: the number of CPU threads and whether to also use the graphics card. The box is ticked by default for dedicated cards and Apple Silicon; tick it to use integrated graphics too.
+
+The **Estimate** box shows how hard your pattern is and how long it should take on your computer. While searching you see the speed, the keys checked and the chance that the address has been found by now. Found addresses appear in a list with *Copy address* and *Show keys folder* buttons. Settings are remembered between launches.
+
+## Command line
+
+The command-line program is `torv3-vanity` (`torv3-vanity.exe` on Windows; in PowerShell run it as `.\torv3-vanity.exe` from its folder).
+
+```text
+torv3-vanity [OPTIONS] <PATTERN>...
+
+  torv3-vanity shop                   address starting with "shop"
+  torv3-vanity shop -o keys           ...saved in the folder "keys"
+  torv3-vanity shop blog news         several patterns at once
+  torv3-vanity "sh?p"                 ? matches any single character
+  torv3-vanity shop -n 5              find 5 addresses to choose from
+  torv3-vanity shop --anywhere        "shop" anywhere in the address
+  torv3-vanity shop -c blog           starts with "shop" and contains "blog"
+  torv3-vanity shop --estimate        how long will it take?
+  torv3-vanity --benchmark            measure the speed of this computer
+  torv3-vanity --verify keys/shop...  check a saved key folder
+  torv3-vanity --list-gpus            show usable graphics cards
+```
+
+Put patterns that contain `?` in double quotes, so the shell doesn't treat them as file names.
+
+| Option | Meaning |
+|---|---|
+| `-o, --output <DIR>` | Folder to save keys in, created if needed (default: the current folder) |
+| `-n, --count <N>` | Addresses to find per pattern; `0` keeps going until you stop it (default: 1) |
+| `-a, --anywhere` | Match the patterns anywhere in the address, not only at the start |
+| `-c, --contains <TEXT>` | Also require this text somewhere in the address (can be repeated) |
+| `-t, --threads <N>` | CPU threads to use (default: all) |
+| `-g, --gpu <auto\|on\|off>` | `auto` (default) uses a dedicated graphics card or Apple Silicon; `on` also uses integrated graphics; `off` uses only the CPU |
+| `--estimate` | Measure the speed for a few seconds, show the expected time, and exit |
+| `--benchmark [SECONDS]` | Measure the speed (default: 10 seconds) and exit |
+| `--verify <DIR>` | Check a saved key folder: the files are complete, consistent and can sign |
+| `--list-gpus` | List the graphics cards that can be used |
+| `-q, --quiet` | Only print the found addresses, one per line |
+
+Found addresses go to standard output and everything else (progress, messages) to standard error, so `torv3-vanity -q -n 0 shop | head -n 5` works as expected. Press **Ctrl+C** to stop; keys that are being saved are finished first. The exit code is 0 when everything was found, 1 after an error and 130 when stopped with Ctrl+C.
+
+The GPU searches only for text at the start of the address. For "anywhere" searches, and for a short pattern combined with `--contains`, the CPU does the work.
+
+## How long will it take?
+
+Every extra character makes the search **32 times** longer. These are average times; the search is luck-based, so it can be faster or slower. The app (or `--estimate`) shows the estimate for your own computer.
+
+| Characters | Keys to try (average) | 4 CPU cores (~25M keys/s) | 16 CPU cores (~100M keys/s) |
+|:---:|---:|---:|---:|
+| 4 | 1 million | instant | instant |
+| 5 | 34 million | ~1 second | under a second |
+| 6 | 1.1 billion | ~45 seconds | ~10 seconds |
+| 7 | 34 billion | ~25 minutes | ~6 minutes |
+| 8 | 1.1 trillion | ~12 hours | ~3 hours |
+| 9 | 35 trillion | ~16 days | ~4 days |
+| 10 | 1.1 quadrillion | ~1.4 years | ~4 months |
+
+The 4-core figure was measured on a cloud server; the 16-core figure assumes the same speed per core. A graphics card adds its own speed on top.
+
+Tips:
+
+- Searching for **several patterns at once** (`shop, sh0p, store`) is almost free: each key is compared with all of them. The search ends when every pattern has been found, and you can keep the one you like best.
+- Onion addresses only use the letters `a`–`z` and the digits `2`–`7` (**no 0, 1, 8 or 9**). Use `?` for "any character".
+- You can only choose part of the address; the rest stays random.
+
+## What you get
+
+Each address is saved as a folder named after it:
+
+```text
+shopqmr7…xyzd/
+├── hostname                 shopqmr7…xyzd.onion
+├── hs_ed25519_public_key    public key (Tor format)
+├── hs_ed25519_secret_key    PRIVATE key (Tor format)
+└── authorized_clients/      empty; Tor expects it
+```
+
+> [!WARNING]
+> **`hs_ed25519_secret_key` *is* your address.** Anyone who gets a copy can impersonate your site, and if you lose it the address is gone forever. Keep it private and keep a backup (for example on an encrypted USB drive).
+
+## Using your address with Tor
+
+**Linux** (and other Unix systems):
+
+1. Copy the whole folder to the computer that runs your onion service, for example to `/var/lib/tor/my_site/`.
+2. Give it to the Tor user with private permissions:
+   ```bash
+   sudo chown -R debian-tor:debian-tor /var/lib/tor/my_site   # the user is "tor" on some systems
+   sudo chmod 700 /var/lib/tor/my_site
+   ```
+3. Add to your `torrc` (usually `/etc/tor/torrc`):
+   ```text
+   HiddenServiceDir /var/lib/tor/my_site/
+   HiddenServicePort 80 127.0.0.1:8080
+   ```
+4. Restart Tor (`sudo systemctl restart tor`). Your site is now reachable at the address in `hostname`.
+
+**Windows** ([Tor Expert Bundle](https://www.torproject.org/download/tor/)): copy the folder to a short path without spaces, such as `C:\tor\my_site`, and add the same two lines to your `torrc` with that path (`HiddenServiceDir C:\tor\my_site`). Then restart Tor.
+
+To check a key folder before you use it, run `torv3-vanity --verify <folder>`.
+
+## Security
+
+- Keys come from your operating system's secure random number generator. Each worker starts from a fresh random key and walks consecutive keys from it, the technique [mkp224o](https://github.com/cathugger/mkp224o) uses. After an address is saved, the worker starts again from a new random key, so saved keys are never related to each other.
+- Every candidate is **re-derived from scratch** with [curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek), re-checked, and **used to sign and verify a message** exactly as Tor does. It is then written under a temporary name, **read back and verified**, and only then renamed to its address. A bug in the fast search can at worst miss a match; it cannot produce a wrong key.
+- The graphics card is checked against the CPU before every search, and the search continues on the CPU if the GPU returns wrong results.
+- If a key can't be saved (for example because the disk is full), it stays in memory and saving is retried every 10 seconds, so a key that took hours to find isn't lost.
+- The tool never uses the network.
+
+Where the keys are stored matters:
+
+- **Linux and macOS**: key folders are created with permissions `700` and key files with `600`, so other users can't read them. Output folders that the tool creates are `700` too.
+- **Windows**: key folders get the permissions of the folder they are saved in. Folders inside your user folder (`C:\Users\<you>\…`, the app's default) can only be read by you and administrators. Folders elsewhere, such as `C:\keys` or a USB stick, are often readable by every user of the computer.
+- **Cloud sync**: don't save keys in folders that OneDrive, iCloud Drive, Dropbox or Google Drive upload. Documents and Desktop often are, which is why the app uses your home folder by default.
+
+> [!IMPORTANT]
+> **If you generated keys with a pre-1.0 development version of this project using the "external CUDA" GPU mode**, those keys are **unsafe**: their secret nonce was set to the public key, which lets others recover the private key once the address is in use. Stop using them and generate new ones. See [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+<details>
+<summary><b>Windows says "Windows protected your PC"</b></summary>
+
+The program isn't signed with a paid code-signing certificate. Click **More info → Run anyway**. You can check your download against `SHA256SUMS.txt` from the release page (`Get-FileHash .\file.zip` in PowerShell). Archives built by this repository's GitHub Actions release workflow can also be checked with `gh attestation verify <file> --repo Mxrider007/tor-v3-vanity-address-generator`.
+</details>
+
+<details>
+<summary><b>My antivirus complains</b></summary>
+
+Key generators are sometimes flagged by heuristics. The tool is open source: check the SHA-256 checksum, or build it yourself (see [Building from source](#building-from-source)).
+</details>
+
+<details>
+<summary><b>The graphics card isn't used</b></summary>
+
+Run `torv3-vanity --list-gpus`. By default only dedicated graphics cards and Apple Silicon are used; use `--gpu on` (or tick the box in the app) to also use integrated graphics. If no card is listed, update your graphics driver (on Linux, install the Vulkan driver). The GPU only searches for text at the start of the address, so "anywhere" searches, and short patterns combined with *must also contain*, run on the CPU. The messages at the start of a search say why the GPU isn't used.
+</details>
+
+<details>
+<summary><b>"Cannot save keys in …"</b></summary>
+
+The output folder is checked before the search starts. Choose a folder you can write to. On Windows, *Controlled folder access* (ransomware protection) may block new programs from writing to Documents and Desktop; the default folder in your home folder isn't affected.
+</details>
+
+<details>
+<summary><b>"shop0" is rejected</b></summary>
+
+Onion addresses never contain `0`, `1`, `8` or `9`. Use letters that look similar, such as `o`, `l`/`i`, `b` or `g`.
+</details>
+
+<details>
+<summary><b>The app doesn't start on Linux</b></summary>
+
+The app needs an X11 or Wayland desktop with `libxkbcommon` (on X11 also `libxkbcommon-x11`) and an OpenGL or Vulkan driver. Start it from a terminal to see the error message. The command-line tool works without a desktop.
+</details>
+
+<details>
+<summary><b>A folder called <code>.torv3-vanity-tmp-…</code> appeared</b></summary>
+
+Keys are written there first and then renamed. If the program was killed in the middle of saving, the folder can be left behind; it is safe to delete.
+</details>
+
+## Building from source
+
+You need [Rust](https://rustup.rs/) 1.95 or newer. The finished programs are `torv3-vanity` (command line) and `torv3-vanity-gui` (app).
 
 ### Windows
 
-```powershell
-# From the project folder, in PowerShell:
-.\build-windows.bat            # builds kore-vanity.exe + kore-vanity-gui.exe
-.\dist\kore-vanity.exe kore --dst .\keys
-```
+1. Install the **[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)** with the **"Desktop development with C++"** workload. It includes the linker and the Windows SDK, which is needed to embed the program icon. If you install Rust first, `rustup-init.exe` offers to install these for you.
+2. Install **Rust** with [`rustup-init.exe`](https://rustup.rs/) and accept the defaults (the `x86_64-pc-windows-msvc` toolchain).
+3. Get the source code: download it as a zip from the [repository page](https://github.com/Mxrider007/tor-v3-vanity-address-generator) (*Code → Download ZIP*) or with Git:
+   ```powershell
+   git clone https://github.com/Mxrider007/tor-v3-vanity-address-generator.git
+   cd tor-v3-vanity-address-generator
+   ```
+4. Double-click **`build-windows.bat`**, or run in PowerShell:
+   ```powershell
+   cargo build --release --locked --workspace
+   ```
 
-See the full [Windows guide](#windows-prepare-compile-run) below for installing the prerequisites and enabling the GPU.
-
----
-
-## Installation & build
-
-### Prerequisites
-
-| Component | Needed for | Where |
-|-----------|-----------|-------|
-| **Rust** (stable, 1.74+) | everything | <https://rustup.rs/> |
-| **C/C++ build tools** | linking on Windows (`cl.exe`) / `build-essential` on Linux | see below |
-| **CUDA Toolkit 12.x** | *built-in* CUDA (`--features cuda`) **or** building the external `vanity_torv3_cuda` | <https://developer.nvidia.com/cuda-downloads> |
-| **CMake** | building the external `vanity_torv3_cuda` | <https://cmake.org/download/> |
-
-> The default build (`cargo build --release`) is **CPU + external CUDA** and needs **no CUDA toolkit to compile** — GPU acceleration is then provided by a separately-built `vanity_torv3_cuda` binary placed next to `kore-vanity`. You only need the CUDA Toolkit if you build the *built-in* backend with `--features cuda`, or if you build the external binary yourself.
+The first build downloads the dependencies and takes a few minutes. `build-windows.bat` copies both programs to `dist\`; with `cargo` they are in `target\release\`. They are standalone `.exe` files that need no Visual C++ runtime. To package them as a release download (with the license files), see [CONTRIBUTING.md](CONTRIBUTING.md#building-a-release-archive-by-hand-windows).
 
 ### Linux
 
-```bash
-# Build tools + GUI system libs (Ubuntu/Debian)
-sudo apt update
-sudo apt install -y build-essential pkg-config libssl-dev libgtk-3-dev
-
-git clone https://github.com/Mxrider420z/kore-vanity.git
-cd kore-vanity
-
-# CLI + library (CPU + external CUDA)
-cargo build --release
-
-# GUI
-cargo build -p kore-vanity-gui --release
-
-./target/release/kore-vanity --help
-```
-
-**Built-in CUDA on Linux** (optional):
+Install a C toolchain (for example `sudo apt install build-essential`), then:
 
 ```bash
-sudo apt install -y nvidia-cuda-toolkit       # provides libcuda for linking
-cargo build --release --features cuda          # uses the committed ptx/kernel.ptx
-```
-
-**External CUDA binary on Linux** (optional, recommended for GPU):
-
-```bash
-sudo apt install -y cmake nvidia-cuda-toolkit
-git clone https://github.com/Danukeru/torv3_vanity_addr_cuda.git
-cd torv3_vanity_addr_cuda && mkdir build && cd build
-cmake .. && make -j"$(nproc)"
-cp vanity_torv3_cuda ../../kore-vanity/target/release/   # next to kore-vanity
+git clone https://github.com/Mxrider007/tor-v3-vanity-address-generator.git
+cd tor-v3-vanity-address-generator
+cargo build --release --locked --workspace
+# target/release/torv3-vanity-gui  and  target/release/torv3-vanity
 ```
 
 ### macOS
 
-CUDA is not available on macOS, so macOS is CPU-only:
+Install the Xcode command-line tools (`xcode-select --install`), then run the same commands as on Linux.
+
+### Command line only
+
+The app pulls in a graphical toolkit. To build only the command-line tool:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-cargo build --release
-cargo build -p kore-vanity-gui --release
+cargo build --release --locked -p torv3-vanity
 ```
 
----
+Tests, the GPU kernel test with a software GPU, the Tor compatibility test and release instructions are described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Windows: prepare, compile, run
+## How it works
 
-This is the full path from a clean Windows machine to a running build.
-
-### 1. Install the prerequisites
-
-1. **Visual Studio Build Tools (C++)** — required to link Rust programs on Windows.
-   - Download from <https://visualstudio.microsoft.com/downloads/> → "Tools for Visual Studio" → **Build Tools for Visual Studio**.
-   - In the installer, select the **"Desktop development with C++"** workload and install.
-   - (The `build-all-windows.ps1` script can auto-install this for you — see step 3.)
-
-2. **Rust** (MSVC toolchain):
-   ```powershell
-   winget install Rustlang.Rustup
-   # or download from https://rustup.rs/  (choose the x86_64 MSVC default)
-   ```
-   Close and reopen PowerShell afterwards so `cargo` is on `PATH`.
-
-3. **(GPU only) NVIDIA CUDA Toolkit 12.x** and **CMake** — only if you want GPU acceleration:
-   - CUDA Toolkit: <https://developer.nvidia.com/cuda-downloads> (this also installs the NVIDIA driver / `libcuda`). Make sure the `CUDA_PATH` environment variable is set (the installer normally does this).
-   - CMake: <https://cmake.org/download/> (add to `PATH` during install).
-
-### 2. Get the source
-
-```powershell
-git clone https://github.com/Mxrider420z/kore-vanity.git
-cd kore-vanity
-```
-
-If PowerShell blocks the scripts, allow them for the current session:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-### 3. Compile
-
-Pick the option that matches the hardware you have.
-
-**A. CPU + external CUDA (recommended, simplest).** Builds the CLI and GUI; GPU acceleration is provided by `vanity_torv3_cuda.exe`.
-
-```powershell
-.\build-windows.bat
-```
-
-To also build the external GPU binary in one shot (this can auto-install the C++ Build Tools and downloads/compiles the CUDA project; needs CUDA Toolkit + CMake):
-
-```powershell
-.\build-all-windows.ps1
-```
-
-Both produce binaries in the **`dist\`** folder.
-
-**B. Built-in CUDA (single binary, requires CUDA Toolkit).** Compiles the in-process `rustacuda` GPU/hybrid backend using the committed `ptx\kernel.ptx`:
-
-```powershell
-.\build-windows.ps1 -Cuda
-```
-
-> Manual equivalents if you prefer raw cargo:
-> ```powershell
-> cargo build -p kore-vanity --bin kore-vanity --release          # CPU + external CUDA
-> cargo build -p kore-vanity-gui --release
-> cargo build --release --features cuda                           # built-in CUDA
-> ```
-
-### 4. Run
-
-```powershell
-# CLI — find an address starting with "kore", save into .\keys
-.\dist\kore-vanity.exe kore --dst .\keys
-
-# GUI
-.\dist\kore-vanity-gui.exe
-```
-
-For GPU via the **external** path, make sure `vanity_torv3_cuda.exe` is in the same folder as `kore-vanity.exe` (the scripts copy both into `dist\`), then add `--mode cuda` (or leave `--mode auto`).
-
-### Runtime requirements (running a prebuilt binary)
-
-None of the build tools (Rust, Visual Studio, CMake, CUDA Toolkit) are needed just to **run** an already-built binary. Requirements:
-
-- **Any mode:** 64-bit Windows 10/11. If Windows reports a missing `VCRUNTIME140.dll`, install the [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) (usually already present). CPU mode needs nothing else.
-- **GPU — built-in CUDA build** (`--features cuda`): only a **recent NVIDIA driver**. No CUDA Toolkit and no `kernel.ptx` file are needed at runtime — the kernel is embedded in the `.exe` and JIT-compiled by the driver. Run with `--mode cuda` / `--mode hybrid`.
-- **GPU — external CUDA build** (default): a recent NVIDIA driver **and** `vanity_torv3_cuda.exe` next to `kore-vanity.exe`. That tool may also need its CUDA runtime DLL (`cudart64_*.dll`) bundled alongside or provided by an installed CUDA Toolkit.
-
-Modern NVIDIA cards (e.g. an RTX 2080 Ti, compute capability 7.5) need nothing card-specific beyond a current driver. If the GPU can't be initialized, the program prints the reason and falls back to CPU.
-
----
-
-## Usage
-
-### CLI
-
-```bash
-# Basic — address starting with "kore"
-kore-vanity kore
-
-# Multiple prefixes (stops when each is found once)
-kore-vanity kore,block,mysite
-
-# Wildcards: ? matches any single base32 char
-kore-vanity k?re,????wink
-
-# Prefix "kore" AND the address must also contain "block" somewhere
-kore-vanity kore -c block
-
-# Match the pattern anywhere in the address, not just the start
-kore-vanity kore --anywhere
-
-# Output directory, backend and thread count
-kore-vanity kore --dst ./keys --mode cpu --threads 8
-```
-
-### Options
-
-```
-Usage: kore-vanity [OPTIONS] <PREFIXES>...
-
-Arguments:
-  <PREFIXES>...  Desired prefix patterns (comma-separated). Use ? as a wildcard.
-
-Options:
-  -d, --dst <DST>          Output directory (must exist)        [default: .]
-  -m, --mode <MODE>        auto | cpu | cuda | hybrid           [default: auto]
-  -t, --threads <THREADS>  CPU threads (cpu/hybrid modes)       [default: #cores]
-  -c, --contains <PATTERN> Pattern(s) that must appear anywhere (repeatable)
-  -a, --anywhere           Match the prefix pattern anywhere, not just at start
-  -h, --help               Print help
-  -V, --version            Print version
-```
-
-`--mode auto` prefers, in order: built-in CUDA hybrid → built-in CUDA → external CUDA → CPU, falling back automatically to whatever is available.
-
-### GUI
-
-Launch `kore-vanity-gui`, then:
-1. Choose a backend mode (Auto / CPU / GPU / Hybrid).
-2. Enter one or more patterns (comma-separated; `?` is a wildcard).
-3. Optionally add "must also contain" words and toggle "match anywhere".
-4. Pick an output directory and click **Start Generation**.
-
----
-
-## Matching & wildcards
-
-The `?` wildcard and `--anywhere` are evaluated host-side, so support varies by backend:
-
-| Feature | CPU | External CUDA | Built-in CUDA (`--features cuda`) | Hybrid |
-|---|---|---|---|---|
-| Literal prefix | ✅ | ✅ | ✅ | ✅ |
-| `--contains` words | ✅ | ✅ | ✅ | ✅ |
-| `?` wildcard in prefix | ✅ | limited¹ | ❌ (rejected with a message) | ✅ (CPU half) |
-| `--anywhere` | ✅ | limited¹ | ❌ (rejected with a message) | ✅ (CPU half) |
-
-¹ The GPU kernels search for a *literal* leading prefix; wildcard/anywhere matching can only be applied to what the kernel already emits. **For wildcard or "anywhere" searches, use `--mode cpu`** (or hybrid, where the CPU half handles them). The built-in CUDA backend rejects `?`/`--anywhere` with a clear message rather than silently ignoring them.
-
----
-
-## Output format
-
-Each found key is written as a ready-to-use Tor hidden-service directory:
-
-```
-output_directory/
-└── korexxxx…xxxx/                 # onion address without the ".onion" suffix
-    ├── hostname                   # "<address>.onion"
-    ├── hs_ed25519_public_key      # 32-byte header + 32-byte public key  (64 bytes)
-    ├── hs_ed25519_secret_key      # 32-byte header + 64-byte expanded key (96 bytes)
-    └── authorized_clients/        # empty (required by Tor)
-```
-
-On Unix the directory is created `0700` and the secret key `0600` so Tor will accept it.
-
-### Using the key with Tor
-
-Point a `HiddenServiceDir` at the generated directory, for example in `torrc`:
-
-```
-HiddenServiceDir /var/lib/tor/korexxxx…xxxx/
-HiddenServicePort 80 127.0.0.1:8080
-```
-
-Copy the directory into place, fix ownership/permissions, and reload Tor:
-
-```bash
-sudo cp -r korexxxx…xxxx /var/lib/tor/
-sudo chown -R debian-tor:debian-tor /var/lib/tor/korexxxx…xxxx   # tor's user
-sudo chmod 700 /var/lib/tor/korexxxx…xxxx
-sudo systemctl reload tor
-```
-
-(The exact user and paths depend on your distro/Tor packaging.)
-
----
-
-## Performance & expectations
-
-Difficulty grows by **32× per extra fixed character** (base32). Rough order-of-magnitude only — real speed depends heavily on your CPU/GPU:
-
-| Backend | Typical throughput (very approximate) |
-|---------|----------------------------------------|
-| CPU | ~0.5M keys/sec per core |
-| GPU (external CUDA, modern NVIDIA) | tens to hundreds of millions/sec |
-
-Expected work to find a start-anchored prefix is about `32^N` keys for `N` fixed characters:
-
-| Fixed chars | Combinations | Feel |
-|-------------|--------------|------|
-| 4 | ~1 million | instant |
-| 5 | ~33 million | seconds (GPU) / a minute (CPU) |
-| 6 | ~1 billion | minutes |
-| 7 | ~34 billion | hours |
-| 8 | ~1.1 trillion | days |
-
-The CLI and GUI show a live probability and ETA based on the measured key rate. **Tip:** searching for several shorter prefixes, or a short prefix plus a `--contains` word, is far faster than one long prefix.
-
----
-
-## Project layout & development
-
-```
-kore-vanity/
-├── src/
-│   ├── main.rs            # CLI
-│   ├── lib.rs             # library exports
-│   ├── onion.rs           # onion address + Tor key/dir helpers (shared by all backends)
-│   ├── pattern.rs         # ? wildcard matching
-│   ├── probability.rs     # probability / ETA model
-│   └── backend/
-│       ├── mod.rs         # backend selection + dispatch
-│       ├── cpu.rs         # Rayon CPU backend
-│       ├── external_cuda.rs  # drives the external vanity_torv3_cuda binary
-│       ├── cuda.rs        # built-in rustacuda backend (feature = "cuda")
-│       └── hybrid.rs      # CPU + built-in CUDA (feature = "cuda")
-├── gui/                   # egui/eframe GUI
-├── core/                  # no_std CUDA kernel crate (compiled to PTX)
-├── ptx/kernel.ptx         # pre-compiled kernel (so normal builds need no nightly)
-├── build.rs              # locates CUDA libs + the PTX when feature = "cuda"
-├── build-windows.ps1     # Windows: build CLI+GUI (-Cuda for built-in CUDA)
-├── build-all-windows.ps1 # Windows: build CLI+GUI + external CUDA binary
-└── BUILD_INSTRUCTIONS.md # developer build reference
-```
-
-Run the tests with:
-
-```bash
-cargo test                 # CPU/library tests (includes Tor key-format checks)
-cargo clippy --all-targets
-```
-
-The committed `ptx/kernel.ptx` means building `--features cuda` works on **stable** Rust; you only need nightly + `nvptx64-nvidia-cuda` to *regenerate* the kernel (see `BUILD_INSTRUCTIONS.md`).
-
----
+Onion addresses are the Ed25519 public key in base32, so the first 51 characters are just the key's bits. The search walks consecutive public keys `(a + 8k)·B` from a random start. It visits them in groups around a center point, where the neighbours `P ± i·8B` share most of their arithmetic and one batched field inversion serves 513 keys. That costs about 5.5 field multiplications per key, and a pattern is tested with a single bit-mask comparison on the raw key. The same walk runs on the GPU as a WGSL compute shader with 13-bit limb arithmetic. Field arithmetic on the CPU uses the formally verified [fiat-crypto](https://github.com/mit-plv/fiat-crypto) code.
 
 ## Credits
 
-Built upon and inspired by:
-
-- **[tor-v3-vanity](https://github.com/AidenMcClelland/tor-v3-vanity)** by Aiden McClelland — Rust implementation with hybrid CPU/GPU support.
-- **[torv3_vanity_addr_cuda](https://github.com/Danukeru/torv3_vanity_addr_cuda)** by Danukeru — high-performance CUDA kernel used by the external GPU backend.
+- Originally based on [tor-v3-vanity](https://github.com/dr-bonez/tor-v3-vanity) by Aiden McClelland.
+- Search technique from [mkp224o](https://github.com/cathugger/mkp224o); key grouping inspired by [VanitySearch](https://github.com/JeanLucPons/VanitySearch).
+- Built with [curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek), [fiat-crypto](https://github.com/mit-plv/fiat-crypto), [wgpu](https://wgpu.rs) and [egui](https://github.com/emilk/egui).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE). Release downloads include the licenses of all third-party components (`THIRD-PARTY-LICENSES.html`).

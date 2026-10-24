@@ -1,26 +1,43 @@
-//! Kore Vanity Address Generator Library
+//! # torv3-vanity
 //!
-//! This library provides functionality to generate vanity onion addresses
-//! with both CUDA GPU acceleration and CPU fallback support.
+//! Fast generator for Tor v3 `.onion` vanity addresses.
+//!
+//! ```no_run
+//! use torv3_vanity::pattern::{Matcher, Pattern};
+//! use torv3_vanity::search::{Event, GpuMode, Search, SearchConfig};
+//! use std::time::Duration;
+//!
+//! let matcher = Matcher::new(vec![Pattern::parse("shop")?], false, vec![])?;
+//! let search = Search::start(SearchConfig {
+//!     matcher,
+//!     count: Some(1),
+//!     output_dir: "keys".into(),
+//!     cpu_threads: torv3_vanity::search::available_threads(),
+//!     gpu: GpuMode::Auto,
+//! })?;
+//! loop {
+//!     match search.next_event(Duration::from_secs(1)) {
+//!         Some(Event::Found(found)) => println!("{} -> {}", found.address, found.path.display()),
+//!         Some(Event::Finished) => break,
+//!         _ => {}
+//!     }
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Modules:
+//! * [`pattern`] — parsing and matching of search patterns;
+//! * [`search`] — the multi-threaded CPU/GPU search engine;
+//! * [`onion`] — onion addresses and Tor key files;
+//! * [`estimate`] — probability and time estimates.
 
-pub mod backend;
+#![forbid(unsafe_code)]
+
+mod curve;
+pub mod estimate;
 pub mod onion;
 pub mod pattern;
-pub mod probability;
+pub mod search;
 
-pub use backend::{
-    select_backend, select_backend_with_mode, select_backend_with_config,
-    Backend, BackendInfo, BackendMode, GeneratorError, FoundKey, Progress, SearchFilter, format_speed,
-};
-pub use onion::{expanded_secret_key_from_seed, pubkey_to_onion, write_hidden_service_dir};
-pub use probability::{
-    calculate_stats, calculate_progress, format_duration_human, format_probability, format_number,
-    effective_prefix_len, SearchStats, LiveStats, ProbabilityBreakdown,
-};
-pub use pattern::{matches_prefix, contains_pattern, is_valid_pattern};
-
-/// File prefix for Tor ed25519 secret key files
-pub const FILE_PREFIX: &[u8] = b"== ed25519v1-secret: type0 ==\0\0\0";
-
-/// File prefix for Tor ed25519 public key files
-pub const PUBKEY_PREFIX: &[u8] = b"== ed25519v1-public: type0 ==\0\0\0";
+/// The crate version, e.g. `"1.0.0"`.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
