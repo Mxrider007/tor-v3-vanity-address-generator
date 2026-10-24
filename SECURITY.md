@@ -9,7 +9,8 @@ Only the latest release receives security fixes.
 Please **do not open a public issue** for security problems. Report them
 privately through GitHub: go to the repository's **Security** tab and choose
 **Report a vulnerability**. You'll get an answer as soon as possible. Once a fix
-is released you'll be credited, unless you'd rather not be.
+is released you'll be credited, unless you'd rather not be. If that button is
+missing, open an issue that only asks for a private contact, without details.
 
 Especially valuable are reports about anything that could produce weak,
 predictable or incorrect keys, or leak key material.
@@ -28,6 +29,12 @@ Version 1.0.0 removed that mode entirely.
 - `hs_ed25519_secret_key` *is* your onion address. Anyone with a copy can
   impersonate your service. Store it with restrictive permissions and keep an
   offline backup.
-- Generate keys on a machine you trust; Tor V3 Vanity Address Generator never uses the network.
+- Don't keep keys in folders that are synced to a cloud service (OneDrive,
+  iCloud Drive, Dropbox, Google Drive).
+- On Windows, key folders inherit the permissions of the folder they are saved
+  in. Keep them inside your user folder (`C:\Users\<you>\…`), which only you
+  and administrators can read. On Linux and macOS they are always created
+  private (`700`/`600`).
+- Generate keys on a machine you trust; the tool never uses the network.
 - Verify downloads against `SHA256SUMS.txt` from the release page, or build
   from source.

@@ -13,13 +13,14 @@ QUICK START
 
 Nothing needs to be installed. A dedicated graphics card (NVIDIA, AMD or
 Intel) is used automatically if one is found - no CUDA or other toolkit is
-needed.
+needed. Tick the graphics card box in the app to also use integrated
+graphics.
 
 
 WHAT YOU GET
 ------------
-Each address is saved as a folder named after it, by default in
-Documents\Tor Vanity Keys. The folder contains:
+Each address is saved as a folder named after it, by default in your user
+folder: C:\Users\<you>\Tor Vanity Keys. The folder contains:
 
   hostname               your new address (xxxxxxxx.onion)
   hs_ed25519_secret_key  the private key. KEEP IT SECRET AND BACK IT UP.
@@ -28,17 +29,22 @@ Documents\Tor Vanity Keys. The folder contains:
   hs_ed25519_public_key  the public key
   authorized_clients     an empty folder that Tor expects
 
+Keep the keys out of folders that OneDrive, Dropbox or Google Drive upload
+(Documents and Desktop often are). Folders inside C:\Users\<you> can only be
+read by you and administrators; folders elsewhere, such as C:\keys, are
+often readable by every user of the computer.
+
 
 HOW LONG DOES IT TAKE?
 ----------------------
-Every extra character makes the search 32 times longer. Rough times on a
-modern desktop PC:
+Every extra character makes the search 32 times longer. Rough average times
+on the CPU of a modern PC (a graphics card can be much faster):
 
   5 characters   seconds
-  6 characters   about a minute
-  7 characters   under an hour
-  8 characters   several hours to a day
-  9 characters   weeks
+  6 characters   under a minute
+  7 characters   minutes to an hour
+  8 characters   hours to a day
+  9 characters   days to weeks
 
 The app shows an estimate for your computer before you start.
 Only letters a-z and digits 2-7 exist in onion addresses (no 0, 1, 8 or 9).
@@ -48,9 +54,11 @@ Use ? to mean "any character". Searching for several patterns at once
 
 USING THE ADDRESS WITH TOR
 --------------------------
-Copy the whole folder to the computer that runs Tor and add to its torrc:
+Copy the whole folder to the computer that runs Tor (on Windows, a short
+path without spaces is easiest, such as C:\tor\my_site) and add to its
+torrc:
 
-  HiddenServiceDir C:\path\to\the\folder
+  HiddenServiceDir C:\tor\my_site
   HiddenServicePort 80 127.0.0.1:8080
 
 then restart Tor. On Linux the folder is usually placed in /var/lib/tor/,
@@ -65,7 +73,7 @@ torv3-vanity.exe is the command-line version. Open PowerShell in this folder
 and run, for example:
 
   .\torv3-vanity.exe shop
-  .\torv3-vanity.exe shop blog -n 3 -o C:\onion-keys
+  .\torv3-vanity.exe shop blog -n 3 -o "$HOME\onion-keys"
   .\torv3-vanity.exe shop --estimate
   .\torv3-vanity.exe --help
 
