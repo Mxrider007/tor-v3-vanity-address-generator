@@ -4,6 +4,8 @@
 #   packaging/package.sh <windows-x64|linux-x64|macos-universal> <tag>
 #
 # Expects THIRD-PARTY-LICENSES.html in the repository root (see about.toml).
+# On Windows, run it from Git Bash; it uses 7-Zip if `7z` is on the PATH and
+# PowerShell's Compress-Archive otherwise.
 set -euo pipefail
 
 platform=$1
@@ -28,10 +30,18 @@ case "$platform" in
     rm "$root/dist/README.tmp"
     crlf LICENSE "$stage/LICENSE.txt"
     cp THIRD-PARTY-LICENSES.html "$stage/"
-    (cd "$root/dist/stage" && 7z a -tzip -mx=9 "$root/dist/$name.zip" "$name" > /dev/null)
+    if command -v 7z > /dev/null; then
+      (cd "$root/dist/stage" && 7z a -tzip -mx=9 "$root/dist/$name.zip" "$name" > /dev/null)
+    else
+      (cd "$root/dist/stage" && powershell -NoProfile -Command \
+        "Compress-Archive -Path '$name' -DestinationPath '$name.zip'" && mv "$name.zip" "$root/dist/")
+    fi
     ;;
   linux-x64)
-    cp target/release/torv3-vanity-gui target/release/torv3-vanity "$stage/"
+    # Release builds target glibc 2.28 with cargo-zigbuild (see release.yml).
+    bin=target/x86_64-unknown-linux-gnu/release
+    [ -x "$bin/torv3-vanity" ] || bin=target/release
+    cp "$bin/torv3-vanity-gui" "$bin/torv3-vanity" "$stage/"
     readme packaging/linux/README.txt > "$stage/README.txt"
     cp LICENSE THIRD-PARTY-LICENSES.html "$stage/"
     cp gui/assets/icon.png "$stage/torv3-vanity.png"

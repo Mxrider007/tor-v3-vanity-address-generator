@@ -1,5 +1,6 @@
 # cargo-about configuration: generates THIRD-PARTY-LICENSES.html for releases.
-#   cargo about generate --locked -o THIRD-PARTY-LICENSES.html about.hbs
+#   cargo install --locked --features cli cargo-about
+#   cargo about generate --workspace --locked -o THIRD-PARTY-LICENSES.html about.hbs
 accepted = [
     "0BSD",
     "Apache-2.0",

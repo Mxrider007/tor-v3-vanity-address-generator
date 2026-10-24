@@ -5,8 +5,11 @@ updates:
     schedule:
       interval: monthly
     groups:
+      # Routine updates in one PR; major updates (such as wgpu 30 -> 31) come
+      # one at a time, so a breaking change cannot hold the rest back.
       rust-dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
