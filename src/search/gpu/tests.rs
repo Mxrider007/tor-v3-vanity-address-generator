@@ -64,46 +64,48 @@ fn walk_key_indices() {
     assert!(walk.key(hit(0, 0, KEYS_PER_GROUP as u32), 1).is_err());
 }
 
-fn test_gpu(threads: u32, filters: usize) -> Gpu {
-    let adapter = choose(GpuMode::On, true).into_iter().next().expect(
-        "no GPU found (on Linux, install mesa-vulkan-drivers for the lavapipe software GPU)",
+#[test]
+fn hit_list_is_decoded() {
+    let mut words = vec![0u32; 1 + 3 * MAX_HITS];
+    words[..7].copy_from_slice(&[2, 5, 1, 7, 9, 0, 128]);
+    let (hits, total) = parse_hits(&words);
+    assert_eq!(total, 2);
+    assert_eq!(
+        hits,
+        [
+            Hit {
+                thread: 5,
+                group: 1,
+                index: 7
+            },
+            Hit {
+                thread: 9,
+                group: 0,
+                index: 128
+            }
+        ]
     );
+    // Only MAX_HITS are recorded, however many there were.
+    words[0] = 5000;
+    let (hits, total) = parse_hits(&words);
+    assert_eq!((hits.len(), total), (MAX_HITS, 5000));
+}
+
+/// A wgpu device (a real GPU, or Mesa's lavapipe software GPU).
+fn test_gpu(threads: u32, filters: usize) -> Gpu {
+    let adapter = wgpu_adapters(GpuMode::On, true, GpuApi::Auto)
+        .into_iter()
+        .next()
+        .expect(
+            "no GPU found (on Linux, install mesa-vulkan-drivers for the lavapipe software GPU)",
+        );
     eprintln!("testing on {:?}", adapter.get_info());
     Gpu::new(&adapter, threads, filters).unwrap()
 }
 
-impl Gpu {
-    fn read_centers(&self, threads: u32) -> Vec<u32> {
-        let size = u64::from(threads) * 64;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(&self.centers, 0, &buffer, 0, size);
-        self.queue.submit([encoder.finish()]);
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .unwrap();
-        let data = buffer.slice(..).get_mapped_range().unwrap();
-        data.as_chunks::<4>()
-            .0
-            .iter()
-            .map(|c| u32::from_le_bytes(*c))
-            .collect()
-    }
-}
-
-/// Run the real kernel and compare every candidate and the final centers
-/// with the CPU walker.
-#[test]
-#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
-fn kernel_matches_cpu_walker() {
+/// Run the kernel and compare every candidate and the final centers with the
+/// CPU walker.
+fn check_kernel_matches_cpu_walker(new_gpu: impl FnOnce(u32, usize) -> Box<dyn Device>) {
     let (threads, groups) = (3u32, 2u32);
     let table = WalkTable::new(GROUP);
     let walk = GpuWalk::new().unwrap();
@@ -145,9 +147,9 @@ fn kernel_matches_cpu_walker() {
         })
         .collect();
 
-    let gpu = test_gpu(threads, filters.len());
-    gpu.upload_centers(&walk.centers(threads));
-    gpu.upload_filters(&filters);
+    let gpu = new_gpu(threads, filters.len());
+    gpu.upload_centers(&walk.centers(threads)).unwrap();
+    gpu.upload_filters(&filters).unwrap();
     let (hits, total) = gpu
         .dispatch(groups, threads, filters.len() as u32, 2)
         .unwrap();
@@ -156,38 +158,163 @@ fn kernel_matches_cpu_walker() {
     let got: HashSet<Hit> = hits.into_iter().collect();
     let want: HashSet<Hit> = targets.iter().map(|(h, _)| *h).collect();
     assert_eq!(got, want);
-    assert_eq!(gpu.read_centers(threads), next_centers);
+    assert_eq!(gpu.read_centers(threads).unwrap(), next_centers);
 }
 
 /// The start-up self-test passes on a working GPU, and catches a broken one.
-#[test]
-#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
-fn self_test_detects_wrong_results() {
-    let gpu = test_gpu(8, 1);
-    gpu.self_test().unwrap();
+fn check_self_test_detects_wrong_results(gpu: &dyn Device) {
+    self_test(gpu).unwrap();
     // Wrong arithmetic gives wrong points, like a slightly wrong start point.
-    assert!(
-        gpu.check_against_cpu(|centers| centers[8] ^= 1 << 4)
-            .is_err()
-    );
-    gpu.self_test().unwrap();
+    assert!(check_against_cpu(gpu, |centers| centers[8] ^= 1 << 4).is_err());
+    self_test(gpu).unwrap();
 }
 
-/// More candidates than MAX_HITS: only the recorded share of keys counts.
-#[test]
-#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
-fn hit_overflow_is_reported() {
-    let threads = 64u32;
-    let gpu = test_gpu(threads, 1);
+/// More candidates than MAX_HITS: only MAX_HITS are recorded.
+fn check_hit_overflow_is_reported(gpu: &dyn Device, threads: u32) {
     let walk = GpuWalk::new().unwrap();
-    gpu.upload_centers(&walk.centers(threads));
+    gpu.upload_centers(&walk.centers(threads)).unwrap();
     // Match every key whose y starts with a 0 bit: about half of them.
     let mut filter = [0u32; 16];
     filter[0] = 1;
-    gpu.upload_filters(&[filter]);
+    gpu.upload_filters(&[filter]).unwrap();
     let (hits, total) = gpu.dispatch(1, threads, 1, 1).unwrap();
     assert_eq!(hits.len(), MAX_HITS);
     assert!(total as usize > MAX_HITS, "{total}");
+}
+
+#[test]
+#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
+fn kernel_matches_cpu_walker() {
+    check_kernel_matches_cpu_walker(|threads, filters| Box::new(test_gpu(threads, filters)));
+}
+
+#[test]
+#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
+fn self_test_detects_wrong_results() {
+    check_self_test_detects_wrong_results(&test_gpu(SELF_TEST_THREADS, 1));
+}
+
+#[test]
+#[ignore = "needs a GPU or lavapipe; run with `cargo test -- --ignored`"]
+fn hit_overflow_is_reported() {
+    check_hit_overflow_is_reported(&test_gpu(64, 1), 64);
+}
+
+/// The CUDA kernel, compiled for the CPU (`--features kernel-test`).
+#[cfg(feature = "kernel-test")]
+mod cuda_kernel {
+    use super::*;
+    use crate::curve::field::Fe;
+    use crate::search::gpu::cuda::host::{FieldOp, HostKernel, field_op};
+
+    #[test]
+    fn kernel_matches_cpu_walker() {
+        check_kernel_matches_cpu_walker(|threads, filters| {
+            Box::new(HostKernel::new(threads, filters))
+        });
+    }
+
+    #[test]
+    fn self_test_detects_wrong_results() {
+        check_self_test_detects_wrong_results(&HostKernel::new(SELF_TEST_THREADS, 1));
+    }
+
+    #[test]
+    fn hit_overflow_is_reported() {
+        check_hit_overflow_is_reported(&HostKernel::new(64, 1), 64);
+    }
+
+    /// A canonical field element as packed words.
+    fn words(f: Fe) -> [u32; 8] {
+        shader::words(&f.to_bytes())
+    }
+
+    fn random_fe() -> Fe {
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).unwrap();
+        bytes[31] &= 0x7f;
+        // Reduce values in [p, 2^255) like the kernel's inputs never are.
+        Fe::from_bytes(&Fe::from_bytes(&bytes).to_bytes())
+    }
+
+    /// Values near the edges of the representation.
+    fn special() -> Vec<Fe> {
+        let p_minus = |k: u8| {
+            let mut b = [0xffu8; 32];
+            b[31] = 0x7f;
+            b[0] = 0xed - k;
+            Fe::from_bytes(&b)
+        };
+        let mut v = vec![Fe::ZERO, Fe::ONE, p_minus(1), p_minus(2), p_minus(19)];
+        for limb in 0..10usize {
+            // All bits of one 26/25-bit limb set, and only its top bit.
+            let pos = 26 * limb.div_ceil(2) + 25 * (limb / 2);
+            let width = if limb % 2 == 1 { 25 } else { 26 };
+            for bits in [
+                (pos..pos + width).collect::<Vec<_>>(),
+                vec![pos + width - 1],
+            ] {
+                let mut b = [0u8; 32];
+                for bit in bits {
+                    b[bit / 8] |= 1 << (bit % 8);
+                }
+                b[31] &= 0x7f;
+                v.push(Fe::from_bytes(&b));
+            }
+        }
+        let mut all_ones = [0xffu8; 32];
+        all_ones[31] = 0x7f;
+        v.push(Fe::from_bytes(&all_ones));
+        v
+    }
+
+    fn check(a: Fe, b: Fe) {
+        let (wa, wb) = (words(a), words(b));
+        assert_eq!(field_op(FieldOp::Mul, &wa, &wb), words(a.mul(b)));
+        assert_eq!(field_op(FieldOp::Square, &wa, &wb), words(a.square()));
+        assert_eq!(
+            field_op(FieldOp::SumTimesDifference, &wa, &wb),
+            words(a.add(b).mul(a.sub(b)))
+        );
+    }
+
+    #[test]
+    fn field_arithmetic_matches_cpu() {
+        let special = special();
+        for &a in &special {
+            for &b in &special {
+                check(a, b);
+            }
+        }
+        for _ in 0..20_000 {
+            check(random_fe(), random_fe());
+        }
+    }
+
+    #[test]
+    fn inversion_matches_cpu() {
+        for a in special().into_iter().chain((0..200).map(|_| random_fe())) {
+            assert_eq!(
+                field_op(FieldOp::Invert, &words(a), &[0; 8]),
+                words(a.invert())
+            );
+        }
+    }
+
+    /// Inputs in [p, 2^255) are not canonical; the kernel never receives
+    /// them, but it must still reduce its results fully.
+    #[test]
+    fn results_are_canonical() {
+        // p - 1 squared is 1; (p - 1)·(p - 1) + 0 must come out as exactly 1.
+        let mut p_minus_1 = [0xffu8; 32];
+        p_minus_1[31] = 0x7f;
+        p_minus_1[0] = 0xec;
+        let w = shader::words(&p_minus_1);
+        let mut one = [0u32; 8];
+        one[0] = 1;
+        assert_eq!(field_op(FieldOp::Mul, &w, &w), one);
+        assert_eq!(field_op(FieldOp::Square, &w, &w), one);
+    }
 }
 
 /// A complete search on the GPU alone; every key is verified by the CPU.
@@ -208,6 +335,7 @@ fn gpu_only_search_finds_keys() {
         output_dir: dir.clone(),
         cpu_threads: 0,
         gpu: GpuMode::On,
+        gpu_api: GpuApi::Auto,
     })
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(300);

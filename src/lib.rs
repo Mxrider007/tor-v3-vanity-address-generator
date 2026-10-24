@@ -4,7 +4,7 @@
 //!
 //! ```no_run
 //! use torv3_vanity::pattern::{Matcher, Pattern};
-//! use torv3_vanity::search::{Event, GpuMode, Search, SearchConfig};
+//! use torv3_vanity::search::{Event, GpuApi, GpuMode, Search, SearchConfig};
 //! use std::time::Duration;
 //!
 //! let matcher = Matcher::new(vec![Pattern::parse("shop")?], false, vec![])?;
@@ -14,6 +14,7 @@
 //!     output_dir: "keys".into(),
 //!     cpu_threads: torv3_vanity::search::available_threads(),
 //!     gpu: GpuMode::Auto,
+//!     gpu_api: GpuApi::Auto,
 //! })?;
 //! loop {
 //!     match search.next_event(Duration::from_secs(1)) {
@@ -31,7 +32,9 @@
 //! * [`onion`] — onion addresses and Tor key files;
 //! * [`estimate`] — probability and time estimates.
 
-#![forbid(unsafe_code)]
+// Unsafe code is only allowed where the CUDA driver is called
+// (src/search/gpu/cuda).
+#![deny(unsafe_code)]
 
 mod curve;
 pub mod estimate;

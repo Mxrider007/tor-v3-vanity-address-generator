@@ -12,7 +12,7 @@ use torv3_vanity::estimate::{Estimate, format_count, format_duration, format_odd
 use torv3_vanity::onion::verify_hidden_service_dir;
 use torv3_vanity::pattern::{Matcher, Pattern, PatternError};
 use torv3_vanity::search::{
-    Event, GpuMode, RateMeter, Search, SearchConfig, available_threads, list_gpus,
+    Event, GpuApi, GpuMode, RateMeter, Search, SearchConfig, available_threads, list_gpus,
 };
 
 /// `eprintln!` that ignores errors: a closed stderr must not crash a search.
@@ -81,6 +81,11 @@ struct Cli {
     #[arg(short, long, value_enum, default_value_t = GpuArg::Auto)]
     gpu: GpuArg,
 
+    /// How to use the graphics card. "auto" uses CUDA on NVIDIA cards, and
+    /// Vulkan, Metal or DirectX 12 otherwise or if CUDA does not work.
+    #[arg(long, value_enum, value_name = "API", default_value_t = GpuApiArg::Auto)]
+    gpu_api: GpuApiArg,
+
     /// Show how long the search would take, then exit.
     #[arg(long)]
     estimate: bool,
@@ -118,6 +123,32 @@ impl From<GpuArg> for GpuMode {
             GpuArg::Auto => GpuMode::Auto,
             GpuArg::On => GpuMode::On,
             GpuArg::Off => GpuMode::Off,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum GpuApiArg {
+    /// CUDA on NVIDIA cards if it works, otherwise Vulkan, Metal or DirectX 12.
+    Auto,
+    /// NVIDIA cards, through the NVIDIA driver.
+    Cuda,
+    /// Any vendor (Windows and Linux).
+    Vulkan,
+    /// Any vendor (Windows).
+    Dx12,
+    /// Any Mac GPU (macOS).
+    Metal,
+}
+
+impl From<GpuApiArg> for GpuApi {
+    fn from(a: GpuApiArg) -> GpuApi {
+        match a {
+            GpuApiArg::Auto => GpuApi::Auto,
+            GpuApiArg::Cuda => GpuApi::Cuda,
+            GpuApiArg::Vulkan => GpuApi::Vulkan,
+            GpuApiArg::Dx12 => GpuApi::Dx12,
+            GpuApiArg::Metal => GpuApi::Metal,
         }
     }
 }
@@ -168,6 +199,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         let rate = measure_rate(
             threads,
             cli.gpu.into(),
+            cli.gpu_api.into(),
             matcher.anywhere(),
             Duration::from_secs(5),
         )?;
@@ -181,6 +213,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         output_dir: cli.output.clone(),
         cpu_threads: threads,
         gpu: cli.gpu.into(),
+        gpu_api: cli.gpu_api.into(),
     })
     .map_err(|e| e.to_string())?;
     install_ctrlc(&search);
@@ -497,6 +530,7 @@ fn install_ctrlc(search: &Search) {
 fn measure_rate(
     threads: usize,
     gpu: GpuMode,
+    gpu_api: GpuApi,
     anywhere: bool,
     duration: Duration,
 ) -> Result<f64, String> {
@@ -512,6 +546,7 @@ fn measure_rate(
         output_dir: std::env::temp_dir(),
         cpu_threads: threads,
         gpu,
+        gpu_api,
     })
     .map_err(|e| e.to_string())?;
     let report = |event: Option<Event>| -> Result<bool, String> {
@@ -562,7 +597,13 @@ fn measure_rate(
 fn benchmark(cli: &Cli, threads: usize, duration: Duration) -> Result<ExitCode, String> {
     say!("torv3-vanity {} benchmark", torv3_vanity::VERSION);
     say!("CPU threads: {threads}");
-    let rate = measure_rate(threads, cli.gpu.into(), cli.anywhere, duration)?;
+    let rate = measure_rate(
+        threads,
+        cli.gpu.into(),
+        cli.gpu_api.into(),
+        cli.anywhere,
+        duration,
+    )?;
     let _ = writeln!(std::io::stdout(), "{}", format_rate(rate));
     let place = if cli.anywhere {
         "anywhere in the address"

@@ -8,7 +8,7 @@ use eframe::egui::{self, Color32, RichText};
 use torv3_vanity::estimate::{Estimate, format_count, format_duration, format_odds, format_rate};
 use torv3_vanity::pattern::{Matcher, Pattern};
 use torv3_vanity::search::{
-    self, Event, Found, GpuInfo, GpuMode, RateMeter, Search, SearchConfig, Stats,
+    self, Event, Found, GpuApi, GpuInfo, GpuMode, RateMeter, Search, SearchConfig, Stats,
 };
 
 pub const REPO_URL: &str = "https://github.com/Mxrider007/tor-v3-vanity-address-generator";
@@ -230,6 +230,7 @@ impl App {
             output_dir: self.settings.output_dir.clone(),
             cpu_threads: self.settings.threads,
             gpu,
+            gpu_api: GpuApi::Auto,
         };
         self.messages.clear();
         match Search::start(config) {
