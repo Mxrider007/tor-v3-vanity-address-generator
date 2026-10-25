@@ -1,7 +1,26 @@
-//! Embeds the icon and version information in the Windows command-line .exe.
+//! Embeds the icon and version information in the Windows command-line .exe,
+//! and with the `kernel-test` feature builds the CUDA kernel for the CPU.
 
 fn main() {
     println!("cargo:rerun-if-changed=gui/assets/icon.ico");
+    // The tests run the CUDA kernel on the CPU, compiled as plain C++.
+    #[cfg(feature = "kernel-test")]
+    {
+        const KERNEL: &str = "src/search/gpu/cuda/kernel.cu";
+        println!("cargo:rerun-if-changed={KERNEL}");
+        let mut build = cc::Build::new();
+        build.cpp(true).file(KERNEL).opt_level(2);
+        if build.get_compiler().is_like_msvc() {
+            build.flag("/TP").flag("/std:c++20");
+        } else {
+            build
+                .flag("-x")
+                .flag("c++")
+                .flag("-std=c++20")
+                .warnings_into_errors(true);
+        }
+        build.compile("torv3_cuda_kernel_host");
+    }
     // MSVC only: with the GNU toolchain the resource would also be attached
     // to the library, and so end up in every program that links it.
     #[cfg(windows)]

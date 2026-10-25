@@ -31,6 +31,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked --features torv3-vanity/kernel-test -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -48,7 +49,32 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --locked
+      # kernel-test also runs the CUDA kernel, compiled for the CPU.
+      - run: cargo test --workspace --locked --features torv3-vanity/kernel-test
+
+  cuda:
+    name: CUDA kernel
+    # Pinned: the committed PTX is generated with this image's clang 18.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install clang 18
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang-18
+      - name: The committed PTX matches kernel.cu
+        run: scripts/build-cuda-kernel.sh --check
+      - name: NVIDIA's PTX assembler accepts it
+        run: |
+          python3 -m pip download --no-deps --only-binary :all: -d nvcc nvidia-cuda-nvcc-cu12==12.0.140
+          echo "958d54df87d0c0b7207e7fed403d6eeda0890a01cc44cfeaccf87c7f90e9b165  nvcc/nvidia_cuda_nvcc_cu12-12.0.140-py3-none-manylinux1_x86_64.whl" | sha256sum -c
+          python3 -m zipfile -e nvcc/*.whl nvcc
+          ptxas=nvcc/nvidia/cuda_nvcc/bin/ptxas
+          chmod +x "$ptxas"
+          # GTX 900, GTX 10, RTX 20, RTX 30, RTX 40 and H100 series.
+          for arch in sm_50 sm_61 sm_75 sm_86 sm_89 sm_90; do
+            "$ptxas" -arch="$arch" -v src/search/gpu/cuda/kernel.ptx -o /dev/null
+          done
 
   gpu:
     name: GPU kernel (software Vulkan)

@@ -9,9 +9,12 @@ QUICK START
 Requirements: 64-bit Linux with glibc 2.28 or newer (RHEL/Rocky 8+,
 Debian 10+, Ubuntu 18.10+). The app needs an X11 or Wayland desktop with
 libxkbcommon (on X11 also libxkbcommon-x11) and an OpenGL or Vulkan driver.
-The GPU is used for the search through Vulkan when a dedicated graphics card
-is present (install your distribution's Vulkan driver, e.g.
-mesa-vulkan-drivers or the NVIDIA driver); otherwise the CPU is used.
+The GPU is used for the search when a dedicated graphics card is present:
+NVIDIA cards through CUDA (with NVIDIA's own driver and its CUDA library,
+libcuda.so.1, which some distributions package separately, e.g.
+xorg-x11-drv-nvidia-cuda on Fedora; no CUDA toolkit needed), other cards
+through Vulkan (install your distribution's Vulkan driver, e.g.
+mesa-vulkan-drivers). Otherwise the CPU is used.
 
 To add the app to your applications menu:
   install -Dm755 torv3-vanity-gui ~/.local/bin/torv3-vanity-gui

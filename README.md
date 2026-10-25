@@ -40,7 +40,7 @@ uses, ready to go.
 
 - **Easy app**: type your text, press *Start*, done. There's also a full command-line tool.
 - **Fast**: about 6 million keys per second per CPU core.
-- **Uses your graphics card**: NVIDIA, AMD, Intel or Apple GPUs through Vulkan, DirectX 12 or Metal. No CUDA or other toolkit is needed.
+- **Uses your graphics card**: NVIDIA cards through CUDA, and NVIDIA, AMD, Intel or Apple GPUs through Vulkan, DirectX 12 or Metal. Only the normal graphics driver is needed, not the CUDA toolkit.
 - **Safe keys**: every key is re-derived independently, signature-tested, written, read back and verified before it is shown. Keys are checked in CI with a real Tor client.
 - **Ready for Tor**: saves the exact files Tor expects (`hostname`, `hs_ed25519_secret_key`, …).
 - **Flexible patterns**: several patterns at once, `?` wildcards, "anywhere in the address", "must also contain", and several results per pattern.
@@ -69,7 +69,7 @@ xattr -dr com.apple.quarantine "Tor V3 Vanity.app" torv3-vanity
 
 ### Linux (x86-64)
 
-Download **`…-linux-x64.tar.gz`**, extract it and run `./torv3-vanity-gui` (app) or `./torv3-vanity shop` (command line). It runs on any distribution with glibc 2.28 or newer. For GPU support, install your Vulkan driver (for example `mesa-vulkan-drivers` or the NVIDIA driver).
+Download **`…-linux-x64.tar.gz`**, extract it and run `./torv3-vanity-gui` (app) or `./torv3-vanity shop` (command line). It runs on any distribution with glibc 2.28 or newer. For GPU support, install NVIDIA's driver (for CUDA and Vulkan; some distributions package its CUDA library separately, for example `xorg-x11-drv-nvidia-cuda` on Fedora) or your Vulkan driver (for example `mesa-vulkan-drivers`).
 
 ## Using the app
 
@@ -109,6 +109,7 @@ Put patterns that contain `?` in double quotes, so the shell doesn't treat them 
 | `-c, --contains <TEXT>` | Also require this text somewhere in the address (can be repeated) |
 | `-t, --threads <N>` | CPU threads to use (default: all) |
 | `-g, --gpu <auto\|on\|off>` | `auto` (default) uses a dedicated graphics card or Apple Silicon; `on` also uses integrated graphics; `off` uses only the CPU |
+| `--gpu-api <auto\|cuda\|vulkan\|dx12\|metal>` | How to use the graphics card. `auto` (default) uses CUDA on NVIDIA cards, otherwise (or if CUDA doesn't work) Vulkan, Metal or DirectX 12 |
 | `--estimate` | Measure the speed for a few seconds, show the expected time, and exit |
 | `--benchmark [SECONDS]` | Measure the speed (default: 10 seconds) and exit |
 | `--verify <DIR>` | Check a saved key folder: the files are complete, consistent and can sign |
@@ -118,6 +119,8 @@ Put patterns that contain `?` in double quotes, so the shell doesn't treat them 
 Found addresses go to standard output and everything else (progress, messages) to standard error, so `torv3-vanity -q -n 0 shop | head -n 5` works as expected. Press **Ctrl+C** to stop; keys that are being saved are finished first. The exit code is 0 when everything was found, 1 after an error and 130 when stopped with Ctrl+C.
 
 The GPU searches only for text at the start of the address. For "anywhere" searches, and for a short pattern combined with `--contains`, the CPU does the work.
+
+On NVIDIA cards the search uses CUDA through the normal NVIDIA driver; no CUDA toolkit is needed. It works with GeForce GTX 750 and newer cards (Maxwell or later) on Windows and Linux. The first search after installing or updating the program, or the driver, takes some extra time (from a few seconds up to about half a minute on older cards) while the driver prepares the GPU program; it is cached after that. To compare CUDA with Vulkan on your card, run `torv3-vanity --benchmark --gpu-api cuda` and `torv3-vanity --benchmark --gpu-api vulkan`.
 
 ## How long will it take?
 
@@ -192,7 +195,7 @@ Where the keys are stored matters:
 - **Cloud sync**: don't save keys in folders that OneDrive, iCloud Drive, Dropbox or Google Drive upload. Documents and Desktop often are, which is why the app uses your home folder by default.
 
 > [!IMPORTANT]
-> **If you generated keys with a pre-1.0 development version of this project using the "external CUDA" GPU mode**, those keys are **unsafe**: their secret nonce was set to the public key, which lets others recover the private key once the address is in use. Stop using them and generate new ones. See [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
+> **If you generated keys with a pre-1.0 development version of this project using the "external CUDA" GPU mode**, those keys are **unsafe**: their secret nonce was set to the public key, which lets others recover the private key once the address is in use. Stop using them and generate new ones. See [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md). The CUDA support in version 1.0 is a new, built-in implementation and is not affected.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
@@ -213,7 +216,9 @@ Key generators are sometimes flagged by heuristics. The tool is open source: che
 <details>
 <summary><b>The graphics card isn't used</b></summary>
 
-Run `torv3-vanity --list-gpus`. By default only dedicated graphics cards and Apple Silicon are used; use `--gpu on` (or tick the box in the app) to also use integrated graphics. If no card is listed, update your graphics driver (on Linux, install the Vulkan driver). The GPU only searches for text at the start of the address, so "anywhere" searches, and short patterns combined with *must also contain*, run on the CPU. The messages at the start of a search say why the GPU isn't used.
+Run `torv3-vanity --list-gpus`. By default only dedicated graphics cards and Apple Silicon are used; use `--gpu on` (or tick the box in the app) to also use integrated graphics. If no card is listed, update your graphics driver (on Linux, install the NVIDIA driver or your Vulkan driver). The GPU only searches for text at the start of the address, so "anywhere" searches, and short patterns combined with *must also contain*, run on the CPU. The messages at the start of a search say why the GPU isn't used.
+
+If an NVIDIA card is listed with "Vulkan" or "DirectX 12" instead of "CUDA", CUDA isn't available for it: the card is older than the GeForce GTX 750 (Maxwell), the driver is too old, or, on Linux, the driver's CUDA library (`libcuda.so.1`) isn't installed (some distributions package it separately, for example `xorg-x11-drv-nvidia-cuda` on Fedora). `--list-gpus` doesn't say why, but `torv3-vanity --benchmark --gpu-api cuda` does. The card still works, through Vulkan or DirectX 12. If CUDA fails when a search starts, the program says why and continues with Vulkan or DirectX 12 on the same card. To force a particular interface, use `--gpu-api`.
 </details>
 
 <details>
@@ -283,16 +288,19 @@ The app pulls in a graphical toolkit. To build only the command-line tool:
 cargo build --release --locked -p torv3-vanity
 ```
 
-Tests, the GPU kernel test with a software GPU, the Tor compatibility test and release instructions are described in [CONTRIBUTING.md](CONTRIBUTING.md).
+CUDA support is built in by default and needs nothing extra to build: the GPU program is included as PTX code, which the NVIDIA driver compiles when the program runs.
+
+Tests, the GPU kernel tests (also without a GPU), the Tor compatibility test and release instructions are described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## How it works
 
-Onion addresses are the Ed25519 public key in base32, so the first 51 characters are just the key's bits. The search walks consecutive public keys `(a + 8k)·B` from a random start. It visits them in groups around a center point, where the neighbours `P ± i·8B` share most of their arithmetic and one batched field inversion serves 513 keys. That costs about 5.5 field multiplications per key, and a pattern is tested with a single bit-mask comparison on the raw key. The same walk runs on the GPU as a WGSL compute shader with 13-bit limb arithmetic. Field arithmetic on the CPU uses the formally verified [fiat-crypto](https://github.com/mit-plv/fiat-crypto) code.
+Onion addresses are the Ed25519 public key in base32, so the first 51 characters are just the key's bits. The search walks consecutive public keys `(a + 8k)·B` from a random start. It visits them in groups around a center point, where the neighbours `P ± i·8B` share most of their arithmetic and one batched field inversion serves 513 keys. That costs about 5.5 field multiplications per key, and a pattern is tested with a single bit-mask comparison on the raw key. The same walk runs on the GPU: as a CUDA kernel with 26/25-bit limbs and 64-bit products on NVIDIA cards, and as a WGSL compute shader with 13-bit limb arithmetic everywhere else. Field arithmetic on the CPU uses the formally verified [fiat-crypto](https://github.com/mit-plv/fiat-crypto) code.
 
 ## Credits
 
 - Originally based on [tor-v3-vanity](https://github.com/dr-bonez/tor-v3-vanity) by Aiden McClelland.
 - Search technique from [mkp224o](https://github.com/cathugger/mkp224o); key grouping inspired by [VanitySearch](https://github.com/JeanLucPons/VanitySearch).
+- The CUDA kernel's field arithmetic follows the public-domain ref10 code by Daniel J. Bernstein, Niels Duif, Tanja Lange, Peter Schwabe and Bo-Yin Yang.
 - Built with [curve25519-dalek](https://github.com/dalek-cryptography/curve25519-dalek), [fiat-crypto](https://github.com/mit-plv/fiat-crypto), [wgpu](https://wgpu.rs) and [egui](https://github.com/emilk/egui).
 
 ## License

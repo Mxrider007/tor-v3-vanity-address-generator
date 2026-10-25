@@ -1,6 +1,7 @@
 //! GPU worker: the same symmetric key walk as the CPU (see
-//! [`crate::curve::walk`]), written in WGSL and run through wgpu on any
-//! Vulkan, DirectX 12 or Metal device — NVIDIA, AMD, Intel or Apple.
+//! [`crate::curve::walk`]), on NVIDIA cards through CUDA (`cuda/kernel.cu`)
+//! and on any Vulkan, DirectX 12 or Metal device — NVIDIA, AMD, Intel or
+//! Apple — through wgpu (`kernel.wgsl`).
 //!
 //! The GPU only reports *candidates* (keys whose y coordinate passes a prefix
 //! filter). Every candidate is re-derived and verified on the CPU by
@@ -10,8 +11,12 @@
 //! before the search starts, and the GPU is dropped if it reports candidates
 //! that do not pass the filter.
 
+#[cfg(feature = "cuda")]
+#[allow(unsafe_code)]
+mod cuda;
 mod shader;
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -25,12 +30,12 @@ use crate::curve::walk::{Center, GroupWalker, WalkTable, group_offset};
 use crate::onion::SecretKey;
 use crate::pattern::PrefixFilter;
 
-use super::{Event, GpuInfo, GpuMode, Shared, Submitted, Walk, software_gpu_allowed};
+use super::{Event, GpuApi, GpuInfo, GpuMode, Shared, Submitted, Walk, software_gpu_allowed};
 
 /// Half-size of a GPU key group (129 keys per group).
 const GROUP: usize = 64;
 const KEYS_PER_GROUP: u64 = 2 * GROUP as u64 + 1;
-/// Must match `MAX_HITS` in kernel.wgsl.
+/// Must match `MAX_HITS` in kernel.wgsl and cuda/kernel.cu.
 const MAX_HITS: usize = 1024;
 const WORKGROUP_SIZE: u32 = 64;
 const MAX_GROUPS_PER_DISPATCH: u32 = 64;
@@ -75,6 +80,17 @@ fn backend_rank(backend: wgpu::Backend) -> u8 {
     }
 }
 
+/// Whether `api` allows this wgpu backend.
+fn api_allows(api: GpuApi, backend: wgpu::Backend) -> bool {
+    match api {
+        GpuApi::Auto => true,
+        GpuApi::Cuda => false,
+        GpuApi::Vulkan => backend == wgpu::Backend::Vulkan,
+        GpuApi::Dx12 => backend == wgpu::Backend::Dx12,
+        GpuApi::Metal => backend == wgpu::Backend::Metal,
+    }
+}
+
 /// Compute-capable adapters, best first. A GPU usually appears once per
 /// graphics API (for example Vulkan and DirectX 12).
 fn adapters() -> Vec<wgpu::Adapter> {
@@ -104,37 +120,100 @@ fn preferred(info: &wgpu::AdapterInfo) -> bool {
             && info.backend == wgpu::Backend::Metal)
 }
 
+/// Usable GPUs, best first. A card that works with CUDA is listed once, as
+/// CUDA, although wgpu can use it too.
 pub(super) fn list() -> Vec<GpuInfo> {
-    let mut seen = HashSet::new();
-    adapters()
-        .iter()
-        .map(|a| a.get_info())
-        .filter(|info| seen.insert(info.name.clone()))
-        .map(|info| GpuInfo {
+    let mut gpus = Vec::new();
+    #[cfg(feature = "cuda")]
+    gpus.extend(cuda::devices().into_iter().map(|d| GpuInfo {
+        backend: "CUDA".to_string(),
+        discrete: !d.integrated,
+        software: false,
+        preferred: !d.integrated,
+        name: d.name,
+    }));
+    gpus.extend(adapters().iter().map(|a| {
+        let info = a.get_info();
+        GpuInfo {
             backend: backend_name(info.backend).to_string(),
             discrete: info.device_type == wgpu::DeviceType::DiscreteGpu,
             software: info.device_type == wgpu::DeviceType::Cpu,
             preferred: preferred(&info),
             name: info.name,
-        })
-        .collect()
+        }
+    }));
+    let mut seen = HashSet::new();
+    gpus.retain(|g| seen.insert(g.name.clone()));
+    gpus
 }
 
-/// The adapters to try, best first: `Auto` only takes dedicated GPUs and
-/// Apple Silicon, `On` anything that is not a software renderer (unless
+/// A GPU the search may run on.
+enum Candidate {
+    #[cfg(feature = "cuda")]
+    Cuda(cuda::CudaDevice),
+    Wgpu(wgpu::Adapter),
+}
+
+impl Candidate {
+    fn name(&self) -> String {
+        match self {
+            #[cfg(feature = "cuda")]
+            Candidate::Cuda(d) => format!("{} (CUDA)", d.name),
+            Candidate::Wgpu(a) => {
+                let info = a.get_info();
+                format!("{} ({})", info.name, backend_name(info.backend))
+            }
+        }
+    }
+
+    /// Set up the device and its kernel.
+    fn open(&self, max_filters: usize) -> Result<Box<dyn Device>, String> {
+        Ok(match self {
+            #[cfg(feature = "cuda")]
+            Candidate::Cuda(d) => Box::new(cuda::CudaGpu::new(d, max_filters)?),
+            Candidate::Wgpu(a) => Box::new(Gpu::new(a, max_threads(&a.get_info()), max_filters)?),
+        })
+    }
+}
+
+/// The wgpu adapters to try, best first: `Auto` only takes dedicated GPUs
+/// and Apple Silicon, `On` anything that is not a software renderer (unless
 /// explicitly allowed).
-fn choose(mode: GpuMode, software: bool) -> Vec<wgpu::Adapter> {
+fn wgpu_adapters(mode: GpuMode, software: bool, api: GpuApi) -> Vec<wgpu::Adapter> {
     adapters()
         .into_iter()
         .filter(|a| {
             let info = a.get_info();
-            match info.device_type {
-                _ if preferred(&info) => true,
-                wgpu::DeviceType::Cpu => mode == GpuMode::On && software,
-                _ => mode == GpuMode::On,
-            }
+            api_allows(api, info.backend)
+                && match info.device_type {
+                    _ if preferred(&info) => true,
+                    wgpu::DeviceType::Cpu => mode == GpuMode::On && software,
+                    _ => mode == GpuMode::On,
+                }
         })
         .collect()
+}
+
+/// The GPUs to try, best first: CUDA devices (the fastest way to use an
+/// NVIDIA card), then wgpu adapters, which include the same NVIDIA cards in
+/// case CUDA does not work.
+fn choose(mode: GpuMode, software: bool, api: GpuApi) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    #[cfg(feature = "cuda")]
+    if matches!(api, GpuApi::Auto | GpuApi::Cuda) {
+        candidates.extend(
+            cuda::devices()
+                .into_iter()
+                .filter(|d| mode == GpuMode::On || !d.integrated)
+                .map(Candidate::Cuda),
+        );
+    }
+    candidates.extend(
+        wgpu_adapters(mode, software, api)
+            .into_iter()
+            .map(Candidate::Wgpu),
+    );
+    candidates
 }
 
 /// Initial (and maximum) number of GPU invocations per dispatch.
@@ -148,11 +227,11 @@ fn max_threads(info: &wgpu::AdapterInfo) -> u32 {
     }
 }
 
-pub(super) fn run(shared: &Shared, mode: GpuMode, cpu_threads: usize) {
+pub(super) fn run(shared: &Shared, mode: GpuMode, api: GpuApi, cpu_threads: usize) {
     let unavailable = |reason: &str| {
         if cpu_threads == 0 {
             shared.fail(format!("the GPU cannot be used: {reason}"));
-        } else if mode == GpuMode::On {
+        } else if mode == GpuMode::On || api != GpuApi::Auto {
             shared.send(Event::Warning(format!(
                 "the GPU cannot be used: {reason}. Searching on the CPU only."
             )));
@@ -181,26 +260,28 @@ pub(super) fn run(shared: &Shared, mode: GpuMode, cpu_threads: usize) {
         }
     }
 
-    let adapters = choose(mode, software_gpu_allowed());
-    if adapters.is_empty() {
-        return unavailable(if mode == GpuMode::Auto {
-            "no dedicated graphics card was found"
-        } else {
-            "no compatible graphics card was found"
-        });
+    let candidates = choose(mode, software_gpu_allowed(), api);
+    if candidates.is_empty() {
+        return unavailable(&no_gpu_reason(mode, api));
     }
-    // Try each adapter (and graphics API) in turn until one works.
+    // Try each GPU (and graphics API) in turn until one works.
     let mut problems = Vec::new();
     let mut ready = None;
-    for adapter in &adapters {
-        let info = adapter.get_info();
-        let name = format!("{} ({})", info.name, backend_name(info.backend));
-        match Gpu::new(adapter, max_threads(&info), shared.filters.len()).and_then(|gpu| {
-            gpu.self_test()?;
-            Ok(gpu)
-        }) {
+    for candidate in &candidates {
+        let name = candidate.name();
+        let tested =
+            candidate
+                .open(shared.filters.len())
+                .and_then(|gpu| match self_test(gpu.as_ref()) {
+                    Ok(()) => Ok(gpu),
+                    Err(e) => {
+                        release(gpu);
+                        Err(e)
+                    }
+                });
+        match tested {
             Ok(gpu) => {
-                ready = Some((gpu, name));
+                ready = Some((gpu, candidate, name));
                 break;
             }
             Err(e) => problems.push(format!("{name}: {e}")),
@@ -209,7 +290,7 @@ pub(super) fn run(shared: &Shared, mode: GpuMode, cpu_threads: usize) {
             return;
         }
     }
-    let Some((gpu, name)) = ready else {
+    let Some((gpu, candidate, name)) = ready else {
         return unavailable(&problems.join("; "));
     };
     if !problems.is_empty() {
@@ -218,8 +299,11 @@ pub(super) fn run(shared: &Shared, mode: GpuMode, cpu_threads: usize) {
             problems.join("; ")
         )));
     }
-    shared.send(Event::Info(format!("Using the GPU: {name}")));
-    if let Err(e) = gpu.search(shared) {
+    shared.send(Event::Info(format!(
+        "Using the GPU: {name}{}",
+        cuda_note(candidate, api)
+    )));
+    if let Err(e) = search(gpu.as_ref(), shared) {
         if cpu_threads == 0 {
             shared.fail(format!("the GPU stopped working: {e}"));
         } else {
@@ -227,15 +311,112 @@ pub(super) fn run(shared: &Shared, mode: GpuMode, cpu_threads: usize) {
                 "the GPU stopped working ({e}); continuing on the CPU"
             )));
         }
-        // Dropping the device waits for the GPU to become idle, with no
-        // time limit; after a timeout that could block this thread (and the
-        // end of the search) forever.
+        release(gpu);
+    }
+}
+
+/// Free a device that is no longer used. Freeing waits for the GPU to finish
+/// its work, with no time limit, so a device whose dispatch timed out is
+/// leaked instead: waiting could block this thread (and the end of the
+/// search) forever.
+fn release(gpu: Box<dyn Device>) {
+    if gpu.busy() {
         std::mem::forget(gpu);
     }
 }
 
-/// Keys looked for in [`Gpu::self_test`].
+/// Why no GPU could be chosen.
+fn no_gpu_reason(mode: GpuMode, api: GpuApi) -> String {
+    let dedicated = if mode == GpuMode::Auto {
+        "dedicated "
+    } else {
+        ""
+    };
+    let supporting =
+        |what: &str| format!("no {dedicated}graphics card that supports {what} was found");
+    match api {
+        GpuApi::Auto => format!(
+            "no {}graphics card was found",
+            if mode == GpuMode::Auto {
+                "dedicated "
+            } else {
+                "compatible "
+            }
+        ),
+        GpuApi::Cuda => no_cuda_reason(dedicated),
+        GpuApi::Vulkan => supporting("Vulkan"),
+        GpuApi::Dx12 if !cfg!(windows) => "DirectX 12 is only available on Windows".to_string(),
+        GpuApi::Dx12 => supporting("DirectX 12"),
+        GpuApi::Metal if !cfg!(target_os = "macos") => {
+            "Metal is only available on macOS".to_string()
+        }
+        GpuApi::Metal => supporting("Metal"),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn no_cuda_reason(dedicated: &str) -> String {
+    match cuda::status() {
+        Err(e) => format!("CUDA is not available: {e}"),
+        Ok(_) => format!(
+            "no {dedicated}NVIDIA graphics card that supports CUDA (GeForce GTX 750 or newer) was \
+             found"
+        ),
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+fn no_cuda_reason(_dedicated: &str) -> String {
+    "this build has no CUDA support".to_string()
+}
+
+/// When an NVIDIA card is used without CUDA because CUDA is not available,
+/// say why.
+fn cuda_note(candidate: &Candidate, api: GpuApi) -> String {
+    #[cfg(feature = "cuda")]
+    if let Candidate::Wgpu(adapter) = candidate
+        && api == GpuApi::Auto
+        && adapter.get_info().vendor == NVIDIA_VENDOR_ID
+        && let Err(e) = cuda::status()
+    {
+        return format!(" (CUDA is not available: {e})");
+    }
+    let _ = (candidate, api);
+    String::new()
+}
+
+#[cfg(feature = "cuda")]
+const NVIDIA_VENDOR_ID: u32 = 0x10de;
+
+/// Keys looked for in each [`self_test`] dispatch.
 const SELF_TEST_TARGETS: usize = 8;
+/// Invocations in the self-test: more than one workgroup (thread block).
+const SELF_TEST_THREADS: u32 = WORKGROUP_SIZE + 2;
+/// The keys the self-test looks for, as (invocation, group, index): first in
+/// a dispatch of two groups, then in a dispatch of one group that continues
+/// from the centers the first one stored.
+const SELF_TEST_KEYS: [[(u32, u32, u32); SELF_TEST_TARGETS]; 2] = [
+    [
+        (0, 0, 0),
+        (1, 1, 128),
+        (17, 0, 64),
+        (40, 1, 100),
+        (63, 1, 1),
+        (64, 0, 2),
+        (65, 0, 65),
+        (65, 1, 127),
+    ],
+    [
+        (0, 0, 5),
+        (2, 0, 128),
+        (31, 0, 0),
+        (33, 0, 77),
+        (63, 0, 64),
+        (64, 0, 0),
+        (65, 0, 1),
+        (65, 0, 127),
+    ],
+];
 
 /// One candidate reported by the kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,7 +426,202 @@ struct Hit {
     index: u32,
 }
 
-/// Device, pipeline and buffers.
+/// What the search needs from a GPU. Both kernels walk the same keys and use
+/// the same buffer layouts: per invocation 16 words of packed center x and
+/// y, per filter 8 mask and 8 value words, and the hit list read by
+/// [`parse_hits`].
+trait Device {
+    /// Invocations a dispatch may use (the size of the centers buffer).
+    fn max_threads(&self) -> u32;
+
+    fn upload_centers(&self, words: &[u32]) -> Result<(), String>;
+
+    fn upload_filters(&self, filters: &[[u32; 16]]) -> Result<(), String>;
+
+    /// Run `groups` groups on `threads` invocations, checking the first
+    /// `filters` filters on their first `words` words. Returns the recorded
+    /// hits (at most [`MAX_HITS`]) and the total number of hits.
+    fn dispatch(
+        &self,
+        groups: u32,
+        threads: u32,
+        filters: u32,
+        words: u32,
+    ) -> Result<(Vec<Hit>, u32), String>;
+
+    /// Whether a dispatch timed out, so the GPU may still be busy with it.
+    fn busy(&self) -> bool;
+
+    /// The centers the kernel left for the next dispatch.
+    #[cfg(test)]
+    fn read_centers(&self, threads: u32) -> Result<Vec<u32>, String>;
+}
+
+/// Decode the kernel's hit list: the number of hits, then (invocation,
+/// group, index) triples for the first [`MAX_HITS`] of them.
+fn parse_hits(words: &[u32]) -> (Vec<Hit>, u32) {
+    let total = words[0];
+    let hits = words[1..]
+        .chunks_exact(3)
+        .take((total as usize).min(MAX_HITS))
+        .map(|w| Hit {
+            thread: w[0],
+            group: w[1],
+            index: w[2],
+        })
+        .collect();
+    (hits, total)
+}
+
+/// Run the kernel on a few keys and compare its candidates with the CPU
+/// walker's, so a driver that miscompiles the kernel is caught before the
+/// search relies on it.
+fn self_test(gpu: &dyn Device) -> Result<(), String> {
+    check_against_cpu(gpu, |_| {})
+}
+
+/// [`self_test`], with a hook that can corrupt the kernel's input.
+fn check_against_cpu(gpu: &dyn Device, tamper: impl FnOnce(&mut Vec<u32>)) -> Result<(), String> {
+    let threads = SELF_TEST_THREADS;
+    if gpu.max_threads() < threads {
+        return Err("internal error: GPU buffers too small for the self-test".into());
+    }
+    // y of every key of the first three groups, per invocation.
+    let table = WalkTable::new(GROUP);
+    let walk = GpuWalk::new()?;
+    let ys: Vec<Vec<[u8; 32]>> = (0..threads)
+        .map(|t| {
+            let start = ExtendedPoint::mul_base(&walk.walk.scalar(GpuWalk::first_center(t)));
+            let mut walker = GroupWalker::new(&table, Center::from_extended(&start));
+            let mut ys = Vec::new();
+            for _ in 0..3 {
+                walker.step();
+                ys.extend_from_slice(&walker.ys);
+            }
+            ys
+        })
+        .collect();
+
+    let mut centers = walk.centers(threads);
+    tamper(&mut centers);
+    gpu.upload_centers(&centers)?;
+    for (keys, groups, first_group) in [(&SELF_TEST_KEYS[0], 2, 0), (&SELF_TEST_KEYS[1], 1, 2)] {
+        // Look for the keys by the first 64 bits of y.
+        let filters: Vec<[u32; 16]> = keys
+            .iter()
+            .map(|&(t, g, index)| {
+                let key = (first_group + g as usize) * KEYS_PER_GROUP as usize + index as usize;
+                let w = shader::words(&ys[t as usize][key]);
+                let mut f = [0u32; 16];
+                f[..2].copy_from_slice(&[u32::MAX, u32::MAX]);
+                f[8..10].copy_from_slice(&w[..2]);
+                f
+            })
+            .collect();
+        gpu.upload_filters(&filters)?;
+        let (hits, _) = gpu.dispatch(groups, threads, filters.len() as u32, 2)?;
+        let got: HashSet<Hit> = hits.into_iter().collect();
+        let want: HashSet<Hit> = keys
+            .iter()
+            .map(|&(thread, group, index)| Hit {
+                thread,
+                group,
+                index,
+            })
+            .collect();
+        if got != want {
+            return Err("the GPU failed its self-test (it computed wrong results)".into());
+        }
+    }
+    Ok(())
+}
+
+fn search(gpu: &dyn Device, shared: &Shared) -> Result<(), String> {
+    let mut threads = gpu.max_threads();
+    let mut groups = 1u32;
+    let mut filters = ActiveFilters::default();
+    let mut walk: Option<GpuWalk> = None;
+    let mut bad_hits = 0;
+
+    while !shared.should_stop() {
+        if filters.refresh(shared) {
+            gpu.upload_filters(&filters.words)?;
+        }
+        if filters.words.is_empty() {
+            return Ok(());
+        }
+        if walk
+            .as_ref()
+            .is_none_or(|w| w.groups_done + u64::from(groups) > GROUPS_PER_WALK)
+        {
+            let new = GpuWalk::new()?;
+            gpu.upload_centers(&new.centers(threads))?;
+            walk = Some(new);
+        }
+        let current = walk.as_mut().expect("walk was just created");
+
+        let started = Instant::now();
+        let (hits, total) = gpu.dispatch(
+            groups,
+            threads,
+            filters.words.len() as u32,
+            filters.max_words,
+        )?;
+        let elapsed = started.elapsed();
+        // Candidates beyond MAX_HITS are lost, so only count the share of
+        // keys that was really checked.
+        let keys = u64::from(threads) * u64::from(groups) * KEYS_PER_GROUP;
+        let checked = if total as usize > MAX_HITS {
+            (keys as f64 * MAX_HITS as f64 / f64::from(total)) as u64
+        } else {
+            keys
+        };
+        shared.add_gpu_keys(checked);
+
+        let mut saved = false;
+        for hit in hits {
+            let key = current.key(hit, groups)?;
+            let secret =
+                SecretKey::from_parts(&current.walk.scalar(key), current.walk.start.hash_prefix());
+            let pubkey = secret.public_key();
+            if !shared.filters.iter().any(|f| f.test(&pubkey)) {
+                bad_hits += 1;
+                if bad_hits >= MAX_BAD_HITS {
+                    return Err("it returned wrong results".into());
+                }
+                continue;
+            }
+            match shared.submit_key(&secret, &pubkey) {
+                Submitted::Rejected => {}
+                // Keys saved from one walk would be related; start over.
+                Submitted::Saved => {
+                    saved = true;
+                    break;
+                }
+                Submitted::Stop => return Ok(()),
+            }
+        }
+        current.groups_done += u64::from(groups);
+        if saved {
+            walk = None;
+        }
+
+        // Keep each dispatch close to the target duration.
+        if elapsed < TARGET_DISPATCH / 2 && groups < MAX_GROUPS_PER_DISPATCH {
+            groups *= 2;
+        } else if elapsed > TARGET_DISPATCH * 2 {
+            if groups > 1 {
+                groups /= 2;
+            } else if threads > WORKGROUP_SIZE {
+                threads = (threads / 2).max(WORKGROUP_SIZE);
+                walk = None;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// wgpu device, pipeline and buffers.
 struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -258,6 +634,8 @@ struct Gpu {
     readback: wgpu::Buffer,
     max_threads: u32,
     error: Arc<Mutex<Option<String>>>,
+    /// A dispatch timed out, so the GPU may still be busy with it.
+    busy: Cell<bool>,
 }
 
 fn to_bytes(words: &[u32]) -> Vec<u8> {
@@ -390,6 +768,7 @@ impl Gpu {
             readback,
             max_threads,
             error,
+            busy: Cell::new(false),
         })
     }
 
@@ -399,20 +778,26 @@ impl Gpu {
             None => Ok(()),
         }
     }
+}
 
-    fn upload_centers(&self, words: &[u32]) {
+impl Device for Gpu {
+    fn max_threads(&self) -> u32 {
+        self.max_threads
+    }
+
+    fn upload_centers(&self, words: &[u32]) -> Result<(), String> {
         self.queue.write_buffer(&self.centers, 0, &to_bytes(words));
+        Ok(())
     }
 
-    fn upload_filters(&self, filters: &[[u32; 16]]) {
-        let words: Vec<u32> = filters.iter().flatten().copied().collect();
+    fn upload_filters(&self, filters: &[[u32; 16]]) -> Result<(), String> {
+        let words = filters.as_flattened();
         if !words.is_empty() {
-            self.queue.write_buffer(&self.filters, 0, &to_bytes(&words));
+            self.queue.write_buffer(&self.filters, 0, &to_bytes(words));
         }
+        Ok(())
     }
 
-    /// Run `groups` groups on `threads` invocations. Returns the recorded
-    /// hits (at most [`MAX_HITS`]) and the total number of hits.
     fn dispatch(
         &self,
         groups: u32,
@@ -446,173 +831,65 @@ impl Gpu {
                 submission_index: Some(submission),
                 timeout: Some(POLL_TIMEOUT),
             })
-            .map_err(|e| format!("the GPU did not respond: {e}"))?;
+            .map_err(|e| {
+                self.busy.set(true);
+                format!("the GPU did not respond: {e}")
+            })?;
         self.check_error()?;
         rx.recv()
             .map_err(|_| "the GPU result was lost".to_string())?
             .map_err(|e| format!("could not read the GPU result: {e}"))?;
 
-        let result = {
+        let words: Vec<u32> = {
             let data = slice
                 .get_mapped_range()
                 .map_err(|e| format!("could not read the GPU result: {e}"))?;
-            let word =
-                |i: usize| u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().expect("4 bytes"));
-            let total = word(0);
-            let hits = (0..(total as usize).min(MAX_HITS))
-                .map(|i| Hit {
-                    thread: word(1 + 3 * i),
-                    group: word(2 + 3 * i),
-                    index: word(3 + 3 * i),
-                })
-                .collect();
-            (hits, total)
+            data.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect()
         };
         self.readback.unmap();
-        Ok(result)
+        Ok(parse_hits(&words))
     }
 
-    /// Run the kernel on a few keys and compare its candidates with the CPU
-    /// walker's, so a driver that miscompiles the kernel is caught before
-    /// the search relies on it.
-    fn self_test(&self) -> Result<(), String> {
-        self.check_against_cpu(|_| {})
+    fn busy(&self) -> bool {
+        self.busy.get()
     }
 
-    /// [`Gpu::self_test`], with a hook that can corrupt the kernel's input.
-    fn check_against_cpu(&self, tamper: impl FnOnce(&mut Vec<u32>)) -> Result<(), String> {
-        let (threads, groups) = (3u32, 2u32);
-        let table = WalkTable::new(GROUP);
-        let walk = GpuWalk::new()?;
-        let mut keys = Vec::new();
-        for t in 0..threads {
-            let start = ExtendedPoint::mul_base(&walk.walk.scalar(GpuWalk::first_center(t)));
-            let mut walker = GroupWalker::new(&table, Center::from_extended(&start));
-            for g in 0..groups {
-                walker.step();
-                for (index, y) in walker.ys.iter().enumerate() {
-                    let hit = Hit {
-                        thread: t,
-                        group: g,
-                        index: index as u32,
-                    };
-                    keys.push((hit, *y));
-                }
-            }
-        }
-        // Look for a few of those keys by the first 64 bits of y.
-        let step = keys.len() / SELF_TEST_TARGETS;
-        let targets: Vec<&(Hit, [u8; 32])> =
-            keys.iter().step_by(step).take(SELF_TEST_TARGETS).collect();
-        let filters: Vec<[u32; 16]> = targets
+    #[cfg(test)]
+    fn read_centers(&self, threads: u32) -> Result<Vec<u32>, String> {
+        let size = u64::from(threads) * 64;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&self.centers, 0, &buffer, 0, size);
+        self.queue.submit([encoder.finish()]);
+        let (tx, rx) = mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| e.to_string())?;
+        rx.recv()
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let data = buffer
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|e| e.to_string())?;
+        Ok(data
+            .as_chunks::<4>()
+            .0
             .iter()
-            .map(|(_, y)| {
-                let w = shader::words(y);
-                let mut f = [0u32; 16];
-                f[..2].copy_from_slice(&[u32::MAX, u32::MAX]);
-                f[8..10].copy_from_slice(&w[..2]);
-                f
-            })
-            .collect();
-        let mut centers = walk.centers(threads);
-        tamper(&mut centers);
-        self.upload_centers(&centers);
-        self.upload_filters(&filters);
-        let (hits, _) = self.dispatch(groups, threads, filters.len() as u32, 2)?;
-        let got: HashSet<Hit> = hits.into_iter().collect();
-        let want: HashSet<Hit> = targets.iter().map(|(h, _)| *h).collect();
-        if got == want {
-            Ok(())
-        } else {
-            Err("the GPU failed its self-test (it computed wrong results)".into())
-        }
-    }
-
-    fn search(&self, shared: &Shared) -> Result<(), String> {
-        let mut threads = self.max_threads;
-        let mut groups = 1u32;
-        let mut filters = ActiveFilters::default();
-        let mut walk: Option<GpuWalk> = None;
-        let mut bad_hits = 0;
-
-        while !shared.should_stop() {
-            if filters.refresh(shared) {
-                self.upload_filters(&filters.words);
-            }
-            if filters.words.is_empty() {
-                return Ok(());
-            }
-            if walk
-                .as_ref()
-                .is_none_or(|w| w.groups_done + u64::from(groups) > GROUPS_PER_WALK)
-            {
-                let new = GpuWalk::new()?;
-                self.upload_centers(&new.centers(threads));
-                walk = Some(new);
-            }
-            let current = walk.as_mut().expect("walk was just created");
-
-            let started = Instant::now();
-            let (hits, total) = self.dispatch(
-                groups,
-                threads,
-                filters.words.len() as u32,
-                filters.max_words,
-            )?;
-            let elapsed = started.elapsed();
-            // Candidates beyond MAX_HITS are lost, so only count the share of
-            // keys that was really checked.
-            let keys = u64::from(threads) * u64::from(groups) * KEYS_PER_GROUP;
-            let checked = if total as usize > MAX_HITS {
-                (keys as f64 * MAX_HITS as f64 / f64::from(total)) as u64
-            } else {
-                keys
-            };
-            shared.add_gpu_keys(checked);
-
-            let mut saved = false;
-            for hit in hits {
-                let key = current.key(hit, groups)?;
-                let secret = SecretKey::from_parts(
-                    &current.walk.scalar(key),
-                    current.walk.start.hash_prefix(),
-                );
-                let pubkey = secret.public_key();
-                if !shared.filters.iter().any(|f| f.test(&pubkey)) {
-                    bad_hits += 1;
-                    if bad_hits >= MAX_BAD_HITS {
-                        return Err("it returned wrong results".into());
-                    }
-                    continue;
-                }
-                match shared.submit_key(&secret, &pubkey) {
-                    Submitted::Rejected => {}
-                    // Keys saved from one walk would be related; start over.
-                    Submitted::Saved => {
-                        saved = true;
-                        break;
-                    }
-                    Submitted::Stop => return Ok(()),
-                }
-            }
-            current.groups_done += u64::from(groups);
-            if saved {
-                walk = None;
-            }
-
-            // Keep each dispatch close to the target duration.
-            if elapsed < TARGET_DISPATCH / 2 && groups < MAX_GROUPS_PER_DISPATCH {
-                groups *= 2;
-            } else if elapsed > TARGET_DISPATCH * 2 {
-                if groups > 1 {
-                    groups /= 2;
-                } else if threads > WORKGROUP_SIZE {
-                    threads = (threads / 2).max(WORKGROUP_SIZE);
-                    walk = None;
-                }
-            }
-        }
-        Ok(())
+            .map(|c| u32::from_le_bytes(*c))
+            .collect())
     }
 }
 
@@ -679,6 +956,19 @@ fn table_words() -> Vec<u32> {
         }
     }
     out
+}
+
+/// The same table as packed words (8 per coordinate), for the CUDA kernel.
+#[cfg(feature = "cuda")]
+fn table_words_packed() -> Vec<u32> {
+    let table = WalkTable::new(GROUP);
+    table
+        .entries
+        .iter()
+        .chain(std::iter::once(&table.advance))
+        .flat_map(|entry| [entry.x, entry.y, entry.e])
+        .flat_map(|f| shader::words(&f.to_bytes()))
+        .collect()
 }
 
 /// A random walk split across the GPU invocations: invocation `t` walks the

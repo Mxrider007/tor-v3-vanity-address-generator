@@ -44,8 +44,9 @@ use crate::pattern::{MatchResult, Matcher, PrefixFilter};
 ///
 /// The GPU only searches for patterns at the start of the address. Whenever
 /// it cannot be used and there are CPU threads, the search continues on the
-/// CPU alone (with an [`Event::Info`] in `Auto` mode and an
-/// [`Event::Warning`] in `On` mode).
+/// CPU alone, with an [`Event::Warning`] in `On` mode or when a
+/// [`GpuApi`] other than `Auto` was chosen, and an [`Event::Info`]
+/// otherwise. With no CPU threads, it stops with an [`Event::Error`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GpuMode {
     /// Use a dedicated GPU (or Apple Silicon graphics) if one is found.
@@ -55,6 +56,23 @@ pub enum GpuMode {
     On,
     /// CPU only.
     Off,
+}
+
+/// Which GPU programming interface to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuApi {
+    /// CUDA on NVIDIA cards, then Vulkan, Metal or DirectX 12; the first
+    /// that works.
+    #[default]
+    Auto,
+    /// CUDA (NVIDIA cards only).
+    Cuda,
+    /// Vulkan (Windows and Linux).
+    Vulkan,
+    /// DirectX 12 (Windows).
+    Dx12,
+    /// Metal (macOS).
+    Metal,
 }
 
 /// What to search for and how.
@@ -72,6 +90,8 @@ pub struct SearchConfig {
     pub cpu_threads: usize,
     /// GPU usage.
     pub gpu: GpuMode,
+    /// GPU programming interface.
+    pub gpu_api: GpuApi,
 }
 
 /// A saved vanity address.
@@ -167,6 +187,11 @@ pub fn gpu_support() -> bool {
     cfg!(feature = "gpu")
 }
 
+/// Whether this build can use CUDA (the `cuda` feature).
+pub fn cuda_support() -> bool {
+    cfg!(feature = "cuda")
+}
+
 /// List GPUs usable for the search (empty without the `gpu` feature).
 pub fn list_gpus() -> Vec<GpuInfo> {
     #[cfg(feature = "gpu")]
@@ -243,9 +268,9 @@ impl Search {
             }
             #[cfg(feature = "gpu")]
             if use_gpu {
-                let (mode, cpu_threads) = (config.gpu, config.cpu_threads);
+                let (mode, api, cpu_threads) = (config.gpu, config.gpu_api, config.cpu_threads);
                 workers.push(spawn_worker(&shared, "vanity-gpu".into(), move |shared| {
-                    gpu::run(shared, mode, cpu_threads)
+                    gpu::run(shared, mode, api, cpu_threads)
                 })?);
             }
             let shared = Arc::clone(&shared);

@@ -43,6 +43,7 @@ fn config(
         output_dir: dir.0.clone(),
         cpu_threads: 2,
         gpu: GpuMode::Off,
+        gpu_api: GpuApi::Auto,
     }
 }
 

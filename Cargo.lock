@@ -3552,12 +3552,14 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 name = "torv3-vanity"
 version = "1.0.0"
 dependencies = [
+ "cc",
  "clap",
  "ctrlc",
  "curve25519-dalek",
  "ed25519-dalek",
  "fiat-crypto",
  "getrandom 0.4.3",
+ "libloading",
  "pollster 1.0.1",
  "sha2",
  "sha3",

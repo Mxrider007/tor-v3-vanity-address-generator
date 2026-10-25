@@ -14,8 +14,9 @@ name = "torv3-vanity-gui"
 path = "src/main.rs"
 
 [features]
-default = ["gpu"]
+default = ["gpu", "cuda"]
 gpu = ["torv3-vanity/gpu"]
+cuda = ["gpu", "torv3-vanity/cuda"]
 
 [dependencies]
 torv3-vanity = { path = "..", default-features = false }

@@ -18,7 +18,8 @@ Kore Vanity); the programs are `torv3-vanity` and `torv3-vanity-gui`.
   its private key can be recovered from a published signature. **Keys generated
   that way by earlier development versions are unsafe; replace them.** That mode
   has been removed; every key now uses a secret nonce prefix from the OS random
-  number generator.
+  number generator. The new built-in CUDA support (below) shares no code with
+  it.
 - Every key is re-derived independently, checked with a signing self-test,
   written, read back and verified before it is reported. Keys are also checked
   in CI with a real Tor client.
@@ -45,11 +46,16 @@ Kore Vanity); the programs are `torv3-vanity` and `torv3-vanity-gui`.
 - New search engine: about 5 million keys per second per CPU core (0.17M → 22M
   keys/s on a 4-core machine, over 100× faster).
 - GPU acceleration on any NVIDIA, AMD, Intel or Apple GPU through Vulkan,
-  DirectX 12 or Metal. No CUDA toolkit is needed. GPU results are verified on the CPU.
+  DirectX 12 or Metal. GPU results are verified on the CPU.
+- Built-in CUDA support for NVIDIA cards (GeForce GTX 750 and newer, Windows and
+  Linux), used automatically when available, with Vulkan or DirectX 12 as the
+  fallback. It only needs the normal NVIDIA driver, not the CUDA toolkit, and
+  goes through the same CPU self-test and verification as the other GPU paths.
+  `--gpu-api` chooses between CUDA, Vulkan, DirectX 12 and Metal.
 - New app (GUI) with live difficulty and time estimates, progress, a results list
   with *Copy* and *Show keys folder* buttons, remembered settings and an icon.
   If the GPU cannot be used for a search, the app continues on the CPU.
-- Command line: `--count`, `--estimate`, `--benchmark`, `--verify`, `--list-gpus`,
+- Command line: `--count`, `--estimate`, `--benchmark`, `--verify`, `--list-gpus`, `--gpu-api`,
   `--quiet`, clearer messages and exit codes, and an explanation when
   `torv3-vanity.exe` is double-clicked in Windows Explorer.
 - Ready-to-run downloads for Windows (x64), macOS (universal) and Linux (x64,
@@ -70,8 +76,9 @@ Kore Vanity); the programs are `torv3-vanity` and `torv3-vanity-gui`.
 
 ### Removed
 
-- The built-in CUDA backend. Its precompiled kernel referenced functions it did
-  not contain, so it could never load, and it depended on unmaintained crates.
+- The old CUDA backend, replaced by the new built-in CUDA support (see Added).
+  Its precompiled kernel referenced functions it did not contain, so it could
+  never load, and it depended on unmaintained crates.
 - The external CUDA backend and the scripts that downloaded and compiled it.
 
 ### Fixed

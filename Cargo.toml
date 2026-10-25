@@ -35,11 +35,15 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [features]
-default = ["cli", "gpu"]
+default = ["cli", "gpu", "cuda"]
 # The command-line program.
 cli = ["dep:clap", "dep:ctrlc", "dep:windows-sys"]
 # GPU acceleration through wgpu (Vulkan, DirectX 12 or Metal; any vendor).
 gpu = ["dep:wgpu", "dep:pollster"]
+# CUDA for NVIDIA cards, through the NVIDIA driver (no CUDA toolkit needed).
+cuda = ["gpu", "dep:libloading"]
+# For tests: also build the CUDA kernel for the CPU (needs a C++ compiler).
+kernel-test = ["cuda", "dep:cc"]
 
 [dependencies]
 curve25519-dalek = "5"
@@ -56,9 +60,13 @@ ctrlc = { version = "3.5", optional = true }
 
 wgpu = { version = "30", optional = true, default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "metal", "vulkan"] }
 pollster = { version = "1", optional = true }
+libloading = { version = "0.8", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Console"] }
+
+[build-dependencies]
+cc = { version = "1.2", optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
