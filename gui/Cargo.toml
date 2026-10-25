@@ -20,7 +20,7 @@ cuda = ["gpu", "torv3-vanity/cuda"]
 
 [dependencies]
 torv3-vanity = { path = "..", default-features = false }
-eframe = { version = "0.36", features = ["persistence", "glow"] }
+eframe = { version = "0.37", features = ["persistence", "glow"] }
 serde = { version = "1", features = ["derive"] }
 rfd = "0.17"
 directories = "6"
