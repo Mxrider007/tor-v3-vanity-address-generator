@@ -60,7 +60,7 @@ ctrlc = { version = "3.5", optional = true }
 
 wgpu = { version = "30", optional = true, default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "metal", "vulkan"] }
 pollster = { version = "1", optional = true }
-libloading = { version = "0.8", optional = true }
+libloading = { version = "0.9", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Console"] }
